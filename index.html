@@ -9,35 +9,40 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-        body { font-family: -apple-system, system-ui; background: #f5f5f5; padding: 20px; padding-bottom: 50px; }
-        .card { background: white; border-radius: 16px; padding: 20px; margin-bottom: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
-        .header { text-align: center; margin-bottom: 20px; }
-        .header h1 { color: #2196F3; font-size: 28px; }
-        .status { padding: 12px; border-radius: 10px; font-size: 14px; margin-top: 10px; text-align: center; font-weight: 600; }
-        .online { background: #e8f5e9; color: #2e7d32; }
-        .offline { background: #ffebee; color: #c62828; }
-        .ip-input { width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 10px; font-size: 16px; text-align: center; margin-bottom: 10px; }
-        button { width: 100%; padding: 14px; border: none; border-radius: 12px; font-size: 16px; font-weight: 600; cursor: pointer; transition: 0.2s; }
-        .btn-blue { background: #2196F3; color: white; margin-bottom: 10px; }
-        .btn-green { background: #4CAF50; color: white; margin-top: 10px; }
-        .file-list { margin-top: 10px; background: white; border-radius: 12px; overflow: hidden; }
-        .file-item { padding: 10px; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; font-size: 14px; }
-        .progress { height: 20px; background: #eee; border-radius: 10px; margin-top: 15px; display: none; overflow: hidden; }
-        .progress-bar { width: 0%; height: 100%; background: #4CAF50; transition: 0.3s; }
-        .warning { color: #d32f2f; font-size: 12px; margin-top: 10px; display: none; text-align: center; padding: 5px; border: 1px dashed #d32f2f; border-radius: 8px; }
+        body { font-family: -apple-system, system-ui, sans-serif; background: #f0f2f5; padding: 20px; color: #333; }
+        .card { background: white; border-radius: 20px; padding: 20px; margin-bottom: 20px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
+        .header { text-align: center; margin-bottom: 24px; padding-top: 10px; }
+        .header h1 { color: #007AFF; font-size: 32px; font-weight: 800; }
+        .header p { color: #666; font-size: 14px; }
+        .status { padding: 14px; border-radius: 12px; font-size: 15px; margin-top: 12px; text-align: center; font-weight: 600; }
+        .online { background: #E8F5E9; color: #2E7D32; border: 1px solid #C8E6C9; }
+        .offline { background: #FFEBEE; color: #C62828; border: 1px solid #FFCDD2; }
+        .ip-input { width: 100%; padding: 16px; border: 2px solid #EEE; border-radius: 14px; font-size: 17px; text-align: center; margin-bottom: 12px; outline: none; transition: 0.2s; }
+        .ip-input:focus { border-color: #007AFF; }
+        button { width: 100%; padding: 16px; border: none; border-radius: 14px; font-size: 17px; font-weight: 700; cursor: pointer; transition: 0.2s; -webkit-appearance: none; }
+        button:active { transform: scale(0.98); opacity: 0.9; }
+        .btn-blue { background: #007AFF; color: white; margin-bottom: 12px; }
+        .btn-green { background: #34C759; color: white; margin-top: 12px; }
+        .file-list { margin-top: 15px; background: #FFF; border-radius: 14px; }
+        .file-item { padding: 12px 16px; border-bottom: 1px solid #F0F0F0; display: flex; justify-content: space-between; align-items: center; }
+        .progress { height: 12px; background: #E0E0E0; border-radius: 6px; margin-top: 20px; display: none; overflow: hidden; }
+        .progress-bar { width: 0%; height: 100%; background: #34C759; transition: 0.3s; }
+        .warning { color: #FF3B30; font-size: 13px; margin-top: 12px; display: none; text-align: center; padding: 10px; background: #FFF3F2; border-radius: 10px; }
     </style>
 </head>
 <body>
-    <div class="header"><h1>📱 iPhoneSync</h1><p>Передача файлов на ПК</p></div>
+    <div class="header"><h1>📱 iPhoneSync</h1><p>Передача файлов на Ваш ПК</p></div>
 
     <div class="card">
-        <input type="text" id="pcIp" class="ip-input" placeholder="Введите IP компьютера">
+        <label style="display:block;margin-bottom:8px;font-size:13px;color:#888;text-align:center;">IP АДРЕС ВАШЕГО КОМПЬЮТЕРА</label>
+        <input type="text" id="pcIp" class="ip-input" placeholder="Напр: 192.168.1.50">
         <button id="checkBtn" class="btn-blue">🔍 Проверить связь</button>
         <div id="pcStatus" class="status offline">🔴 Не подключен</div>
+        <div id="httpsWarning" class="warning">⚠️ Ошибка: Вы зашли через HTTPS. <br> Используйте http:// для работы в сети.</div>
     </div>
 
     <div class="card">
-        <button id="selectFilesBtn" class="btn-blue">📁 Выбрать файлы</button>
+        <button id="selectFilesBtn" class="btn-blue">📁 Выбрать любые файлы</button>
         <input type="file" id="fileInput" multiple style="display: none;">
         <div id="fileList" class="file-list"></div>
         <button id="sendBtn" class="btn-green" style="display: none;">📤 Отправить на компьютер</button>
@@ -56,76 +61,115 @@
         const progressBar = document.getElementById('progressBar');
         const progressDiv = document.getElementById('progress');
 
+        // Автозаполнение из памяти
         pcIpInput.value = localStorage.getItem('pcIp') || '';
+        if (window.location.protocol === 'https:') document.getElementById('httpsWarning').style.display = 'block';
 
         document.getElementById('checkBtn').onclick = checkConnection;
         document.getElementById('selectFilesBtn').onclick = () => document.getElementById('fileInput').click();
         
         document.getElementById('fileInput').onchange = (e) => {
-            addFiles(Array.from(e.target.files));
-        };
-
-        function addFiles(files) {
+            const files = Array.from(e.target.files);
             selectedFiles.push(...files);
             renderFiles();
-            if (isOnline) sendBtn.style.display = 'block';
-        }
+        };
 
         function renderFiles() {
-            fileList.innerHTML = selectedFiles.map(f => `<div class="file-item"><span>${f.name}</span><span>${(f.size/1024/1024).toFixed(2)} MB</span></div>`).join('');
-            sendBtn.style.display = selectedFiles.length > 0 ? 'block' : 'none';
+            if (selectedFiles.length === 0) {
+                fileList.innerHTML = '';
+                sendBtn.style.display = 'none';
+                return;
+            }
+            fileList.innerHTML = selectedFiles.map((f, i) => `
+                <div class="file-item">
+                    <span style="max-width:70%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${f.name}</span>
+                    <span style="color:#888;font-size:12px;">${(f.size/1024/1024).toFixed(1)} MB</span>
+                </div>
+            `).join('');
+            if (isOnline) sendBtn.style.display = 'block';
         }
 
         async function checkConnection() {
             const ip = pcIpInput.value.trim();
-            if (!ip) return;
+            if (!ip) { alert('Пожалуйста, введите IP адрес компьютера!'); return; }
+            
             localStorage.setItem('pcIp', ip);
+            pcStatus.innerHTML = '🔄 Проверка связи...';
+            pcStatus.className = 'status';
+            
             try {
-                const res = await fetch(`http://${ip}:${PORT}/status`);
+                // Тайм-аут 3 секунды
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 3000);
+
+                const res = await fetch(`http://${ip}:${PORT}/status`, { 
+                    mode: 'cors',
+                    signal: controller.signal
+                });
+                
+                clearTimeout(timeoutId);
                 if (res.ok) {
-                    pcStatus.innerHTML = '✅ Связь установлена!';
+                    pcStatus.innerHTML = '✅ Связь с компьютером установлена!';
                     pcStatus.className = 'status online';
                     isOnline = true;
+                    if (selectedFiles.length > 0) sendBtn.style.display = 'block';
+                } else {
+                    throw new Error();
                 }
             } catch (e) {
-                pcStatus.innerHTML = '❌ ПК не отвечает';
+                pcStatus.innerHTML = '❌ Компьютер не отвечает. <br> Проверьте Агент на ПК и сеть Wi-Fi.';
                 pcStatus.className = 'status offline';
                 isOnline = false;
+                sendBtn.style.display = 'none';
             }
         }
 
         async function sendFiles() {
+            if (!isOnline) { alert('Сначала установите связь с ПК!'); return; }
             const ip = pcIpInput.value.trim();
             progressDiv.style.display = 'block';
+            
             for (let i = 0; i < selectedFiles.length; i++) {
                 const file = selectedFiles[i];
-                progressBar.style.width = ((i / selectedFiles.length) * 100) + '%';
+                const percent = Math.round((i / selectedFiles.length) * 100);
+                progressBar.style.width = percent + '%';
+
                 try {
+                    const formData = new FormData();
                     await fetch(`http://${ip}:${PORT}/upload`, {
                         method: 'POST',
                         mode: 'cors',
-                        headers: { 'X-File-Name': encodeURIComponent(file.name), 'X-File-Size': file.size.toString() },
+                        headers: {
+                            'X-File-Name': encodeURIComponent(file.name),
+                            'X-File-Size': file.size.toString()
+                        },
                         body: file
                     });
-                } catch (e) { console.error(e); }
+                } catch (e) {
+                    alert('Ошибка при передаче файла: ' + file.name);
+                }
             }
+            
             progressBar.style.width = '100%';
             setTimeout(() => {
-                alert('🎉 Файлы отправлены!');
+                alert('🎉 Все файлы успешно переданы на компьютер!');
                 progressDiv.style.display = 'none';
+                progressBar.style.width = '0%';
                 selectedFiles = [];
                 renderFiles();
-            }, 500);
+            }, 600);
         }
 
         sendBtn.onclick = sendFiles;
 
-        // ЛОВИМ ФАЙЛЫ ИЗ МЕНЮ "ПОДЕЛИТЬСЯ"
+        // Service Worker для PWA
         if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.register('sw.js');
+            navigator.serviceWorker.register('sw.js').catch(e => console.error('SW Error:', e));
+            
             navigator.serviceWorker.addEventListener('message', (event) => {
                 if (event.data && event.data.type === 'SHARE_TARGET_FILES') {
-                    addFiles(event.data.files);
+                    selectedFiles.push(...event.data.files);
+                    renderFiles();
                 }
             });
         }
