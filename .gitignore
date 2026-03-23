@@ -15,6 +15,10 @@ Release/
 *.dll
 *.pdb
 
+# IDEs (Android Studio / Rider)
+.idea/
+*.iml
+
 # OS
 .DS_Store
 Thumbs.db
