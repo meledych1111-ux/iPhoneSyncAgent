@@ -36,10 +36,7 @@ namespace iPhoneSyncAgent
             saveFolder = Properties.Settings.Default.SaveFolder;
             if (string.IsNullOrEmpty(saveFolder))
             {
-                saveFolder = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.MyPictures),
-                    "iPhoneSync"
-                );
+                saveFolder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyPictures), "iPhoneSync");
             }
             txtSavePath.Text = saveFolder;
             Directory.CreateDirectory(saveFolder);
@@ -71,48 +68,26 @@ namespace iPhoneSyncAgent
         private async Task StartServerAsync()
         {
             if (isRunning) return;
-            
             try
             {
                 tcpListener = new TcpListener(IPAddress.Any, currentPort);
                 tcpListener.Start();
-                
                 isRunning = true;
                 UpdateUI(true);
-                Log($"✅ Сервер запущен на порту {currentPort}");
-                Log($"📁 Папка сохранения: {saveFolder}");
-                
+                Log($"✅ Сервер активен: порт {currentPort}");
+                Log($"📁 Куда сохраняем: {saveFolder}");
                 _ = Task.Run(() => HandleClientsAsync());
             }
-            catch (Exception ex)
-            {
-                Log($"❌ Ошибка запуска: {ex.Message}");
-            }
+            catch (Exception ex) { Log($"❌ Ошибка запуска: {ex.Message}"); }
         }
 
         private void StopServer()
         {
             if (!isRunning) return;
-            
             tcpListener?.Stop();
             isRunning = false;
             UpdateUI(false);
             Log("⏹ Сервер остановлен");
-        }
-
-        private void UpdateUI(bool running)
-        {
-            if (InvokeRequired)
-            {
-                Invoke(new Action(() => UpdateUI(running)));
-                return;
-            }
-            
-            btnStart.Enabled = !running;
-            btnStop.Enabled = running;
-            lblStatus.Text = running ? "✅ Статус: Работает" : "⭕ Статус: Остановлен";
-            lblStatus.ForeColor = running ? Color.Green : Color.Red;
-            cmbPort.Enabled = !running;
         }
 
         private async Task HandleClientsAsync()
@@ -124,11 +99,7 @@ namespace iPhoneSyncAgent
                     var client = await tcpListener.AcceptTcpClientAsync();
                     _ = Task.Run(() => HandleClientAsync(client));
                 }
-                catch (Exception ex)
-                {
-                    if (isRunning)
-                        Log($"Ошибка приема клиента: {ex.Message}");
-                }
+                catch { }
             }
         }
 
@@ -139,8 +110,7 @@ namespace iPhoneSyncAgent
                 using (client)
                 using (var stream = client.GetStream())
                 {
-                    // 1. Читаем запрос
-                    byte[] buffer = new byte[8192];
+                    byte[] buffer = new byte[16384];
                     int bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length);
                     if (bytesRead == 0) return;
 
@@ -148,124 +118,111 @@ namespace iPhoneSyncAgent
                     string[] lines = requestData.Split(new[] { "\r\n" }, StringSplitOptions.None);
                     if (lines.Length == 0) return;
 
-                    string firstLine = lines[0]; // Например: "POST /upload HTTP/1.1"
-                    string[] parts = firstLine.Split(' ');
+                    string[] parts = lines[0].Split(' ');
                     if (parts.Length < 2) return;
 
                     string method = parts[0];
                     string path = parts[1];
 
-                    // 2. Обработка CORS (важно для iPhone)
+                    // Поддержка CORS для iPhone
                     if (method == "OPTIONS")
                     {
                         await SendResponseAsync(stream, "204 No Content", "", true);
                         return;
                     }
 
-                    // 3. Маршрутизация
-                    if (path == "/status" && method == "GET")
+                    // Проверка статуса (API)
+                    if (path == "/status" || path == "/status/")
                     {
-                        string json = $"{{\"status\":\"ok\", \"port\":{currentPort}}}";
-                        await SendResponseAsync(stream, "200 OK", json, true, "application/json");
+                        await SendResponseAsync(stream, "200 OK", "{\"status\":\"ok\"}", true, "application/json");
+                        return;
                     }
-                    else if (path == "/upload" && method == "POST")
+
+                    // ПРИЕМ ЛЮБЫХ ФАЙЛОВ (Фото, Документы, Музыка)
+                    if (path.StartsWith("/upload") && method == "POST")
                     {
                         await HandleFileUpload(stream, lines, buffer, bytesRead);
+                        return;
+                    }
+
+                    // ОТДАЧА ИНТЕРФЕЙСА PWA (чтобы не было 404)
+                    string requestedFile = path == "/" ? "index.html" : path.TrimStart('/');
+                    string fullFilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, requestedFile);
+                    
+                    // Если не нашли в bin, смотрим в корне (для отладки)
+                    if (!File.Exists(fullFilePath))
+                        fullFilePath = Path.Combine(Directory.GetParent(AppDomain.CurrentDomain.BaseDirectory).Parent.Parent.FullName, requestedFile);
+
+                    if (File.Exists(fullFilePath))
+                    {
+                        byte[] fileBytes = File.ReadAllBytes(fullFilePath);
+                        await SendRawResponseAsync(stream, "200 OK", fileBytes, GetContentType(fullFilePath));
                     }
                     else
                     {
-                        // Пытаемся отдать статические файлы (index.html, manifest.json и т.д.)
-                        string fileName = path == "/" ? "index.html" : path.TrimStart('/');
-                        if (File.Exists(fileName))
-                        {
-                            byte[] fileBytes = File.ReadAllBytes(fileName);
-                            string contentType = GetContentType(fileName);
-                            await SendRawResponseAsync(stream, "200 OK", fileBytes, contentType);
-                        }
-                        else
-                        {
-                            await SendResponseAsync(stream, "404 Not Found", "Not Found", true);
-                        }
+                        await SendResponseAsync(stream, "404 Not Found", "File Not Found", true);
                     }
                 }
             }
-            catch (Exception ex)
-            {
-                Log($"Ошибка обработки запроса: {ex.Message}");
-            }
+            catch (Exception ex) { Log($"Ошибка: {ex.Message}"); }
         }
 
         private async Task HandleFileUpload(NetworkStream stream, string[] lines, byte[] initialBuffer, int initialBytesRead)
         {
-            try
+            //StringComparer.OrdinalIgnoreCase делает поиск X-File-Name независимым от регистра
+            var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            string rawStr = Encoding.UTF8.GetString(initialBuffer, 0, initialBytesRead);
+            int headerEndIndex = rawStr.IndexOf("\r\n\r\n") + 4;
+
+            foreach (var line in lines.Skip(1))
             {
-                Dictionary<string, string> headers = new Dictionary<string, string>();
-                int headerEndIndex = 0;
-                
-                // Ищем конец заголовков в буфере
-                string rawContent = Encoding.UTF8.GetString(initialBuffer, 0, initialBytesRead);
-                headerEndIndex = rawContent.IndexOf("\r\n\r\n");
-                if (headerEndIndex == -1) return;
-                headerEndIndex += 4;
-
-                foreach (var line in lines.Skip(1))
-                {
-                    if (string.IsNullOrEmpty(line)) break;
-                    int colon = line.IndexOf(':');
-                    if (colon > 0)
-                        headers[line.Substring(0, colon).Trim()] = line.Substring(colon + 1).Trim();
-                }
-
-                headers.TryGetValue("X-File-Name", out string? fileName);
-                headers.TryGetValue("X-File-Date", out string? fileDate);
-                headers.TryGetValue("X-File-Size", out string? fileSizeStr);
-                long.TryParse(fileSizeStr, out long fileSize);
-
-                if (string.IsNullOrEmpty(fileName)) fileName = "upload_" + Guid.NewGuid().ToString().Substring(0, 8);
-                fileName = Uri.UnescapeDataString(fileName);
-
-                Log($"📥 Начало загрузки: {fileName} ({FormatBytes(fileSize)})");
-
-                // Формируем имя файла по вашему запросу: Дата_Время_УникальныйID
-                DateTime now = DateTime.Now;
-                string dateFolder = now.ToString("yyyy-MM-dd");
-                string fullPath = Path.Combine(saveFolder, dateFolder);
-                Directory.CreateDirectory(fullPath);
-
-                string uniqueId = Guid.NewGuid().ToString().Substring(0, 8);
-                string ext = Path.GetExtension(fileName);
-                string nameWithoutExt = Path.GetFileNameWithoutExtension(fileName);
-                string newFileName = $"{now:yyyy-MM-dd_HH-mm-ss}_{uniqueId}{ext}";
-                string filePath = Path.Combine(fullPath, newFileName);
-
-                using (var fileStream = new FileStream(filePath, FileMode.Create, FileAccess.Write))
-                {
-                    // Дописываем остаток из первого буфера
-                    int remainingInInitial = initialBytesRead - headerEndIndex;
-                    if (remainingInInitial > 0)
-                    {
-                        await fileStream.WriteAsync(initialBuffer, headerEndIndex, remainingInInitial);
-                    }
-
-                    long totalRead = remainingInInitial;
-                    byte[] buffer = new byte[65536];
-                    int bytesRead;
-
-                    while (totalRead < fileSize && (bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length)) > 0)
-                    {
-                        await fileStream.WriteAsync(buffer, 0, bytesRead);
-                        totalRead += bytesRead;
-                    }
-                }
-
-                Log($"✅ Файл сохранен: {newFileName}");
-                await SendResponseAsync(stream, "200 OK", "OK", true);
+                if (string.IsNullOrEmpty(line)) break;
+                int colon = line.IndexOf(':');
+                if (colon > 0) headers[line.Substring(0, colon).Trim()] = line.Substring(colon + 1).Trim();
             }
-            catch (Exception ex)
+
+            headers.TryGetValue("X-File-Name", out string? fileName);
+            headers.TryGetValue("X-File-Size", out string? fileSizeStr);
+            long.TryParse(fileSizeStr, out long fileSize);
+
+            if (string.IsNullOrEmpty(fileName)) {
+                Log("❌ Ошибка: iPhone не передал имя файла");
+                await SendResponseAsync(stream, "400 Bad Request", "No Filename", true);
+                return;
+            }
+
+            fileName = Uri.UnescapeDataString(fileName);
+            DateTime now = DateTime.Now;
+            
+            // Создаем папку по дате
+            string dateFolder = now.ToString("yyyy-MM-dd");
+            string targetPath = Path.Combine(saveFolder, dateFolder);
+            Directory.CreateDirectory(targetPath);
+
+            // ИМЯ ФАЙЛА: Дата_Время_УникальныйID.расширение
+            string uniqueId = Guid.NewGuid().ToString().Substring(0, 8);
+            string extension = Path.GetExtension(fileName);
+            string newFileName = $"{now:yyyy-MM-dd_HH-mm-ss}_{uniqueId}{extension}";
+            string filePath = Path.Combine(targetPath, newFileName);
+
+            using (var fileStream = new FileStream(filePath, FileMode.Create))
             {
-                Log($"❌ Ошибка при сохранении: {ex.Message}");
-                await SendResponseAsync(stream, "500 Internal Server Error", ex.Message, true);
+                int remaining = initialBytesRead - headerEndIndex;
+                if (remaining > 0) await fileStream.WriteAsync(initialBuffer, headerEndIndex, remaining);
+
+                long totalRead = remaining;
+                byte[] buffer = new byte[65536];
+                while (totalRead < fileSize)
+                {
+                    int read = await stream.ReadAsync(buffer, 0, buffer.Length);
+                    if (read == 0) break;
+                    await fileStream.WriteAsync(buffer, 0, read);
+                    totalRead += read;
+                }
             }
+
+            Log($"📥 Принят файл: {newFileName} ({FormatBytes(fileSize)})");
+            await SendResponseAsync(stream, "200 OK", "OK", true);
         }
 
         private async Task SendResponseAsync(NetworkStream stream, string status, string content, bool addCors, string contentType = "text/plain")
@@ -276,145 +233,28 @@ namespace iPhoneSyncAgent
 
         private async Task SendRawResponseAsync(NetworkStream stream, string status, byte[] body, string contentType, bool addCors = true)
         {
-            StringBuilder sb = new StringBuilder();
-            sb.Append($"HTTP/1.1 {status}\r\n");
-            sb.Append($"Content-Type: {contentType}\r\n");
-            sb.Append($"Content-Length: {body.Length}\r\n");
-            if (addCors)
-            {
-                sb.Append("Access-Control-Allow-Origin: *\r\n");
-                sb.Append("Access-Control-Allow-Methods: POST, GET, OPTIONS\r\n");
-                sb.Append("Access-Control-Allow-Headers: X-File-Name, X-File-Date, X-File-Size, Content-Type\r\n");
-            }
-            sb.Append("Connection: close\r\n");
-            sb.Append("\r\n");
-
-            byte[] header = Encoding.UTF8.GetBytes(sb.ToString());
-            await stream.WriteAsync(header, 0, header.Length);
+            string head = $"HTTP/1.1 {status}\r\nContent-Type: {contentType}\r\nContent-Length: {body.Length}\r\n" +
+                          (addCors ? "Access-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: *\r\nAccess-Control-Allow-Headers: *\r\n" : "") +
+                          "Connection: close\r\n\r\n";
+            byte[] hBytes = Encoding.UTF8.GetBytes(head);
+            await stream.WriteAsync(hBytes, 0, hBytes.Length);
             await stream.WriteAsync(body, 0, body.Length);
-            await stream.FlushAsync();
         }
 
-        private string GetContentType(string fileName)
+        private string GetContentType(string path)
         {
-            string ext = Path.GetExtension(fileName).ToLower();
-            return ext switch
-            {
-                ".html" => "text/html",
-                ".json" => "application/json",
-                ".js" => "application/javascript",
-                ".css" => "text/css",
-                ".png" => "image/png",
-                ".jpg" => "image/jpeg",
-                _ => "application/octet-stream"
-            };
+            string ext = Path.GetExtension(path).ToLower();
+            return ext switch { ".html" => "text/html", ".json" => "application/json", ".js" => "application/javascript", ".css" => "text/css", ".png" => "image/png", ".jpg" => "image/jpeg", _ => "application/octet-stream" };
         }
 
-        private void Log(string message)
-        {
-            if (txtLog.InvokeRequired)
-            {
-                txtLog.Invoke(new Action(() => Log(message)));
-                return;
-            }
-            
-            string timestamp = DateTime.Now.ToString("HH:mm:ss");
-            txtLog.AppendText($"[{timestamp}] {message}{Environment.NewLine}");
-            txtLog.SelectionStart = txtLog.Text.Length;
-            txtLog.ScrollToCaret();
-        }
-
-        private string FormatBytes(long bytes)
-        {
-            string[] sizes = { \"Б\", \"КБ\", \"МБ\", \"ГБ\" };
-            double len = bytes;
-            int order = 0;
-            while (len >= 1024 && order < sizes.Length - 1)
-            {
-                order++;
-                len = len / 1024;
-            }
-            return $"{len:0.##} {sizes[order]}";
-        }
-
-        private void BtnBrowse_Click(object? sender, EventArgs e)
-        {
-            using (var dialog = new FolderBrowserDialog())
-            {
-                dialog.SelectedPath = saveFolder;
-                if (dialog.ShowDialog() == DialogResult.OK)
-                {
-                    saveFolder = dialog.SelectedPath;
-                    txtSavePath.Text = saveFolder;
-                    Properties.Settings.Default.SaveFolder = saveFolder;
-                    Properties.Settings.Default.Save();
-                    Log($"Папка сохранения изменена: {saveFolder}");
-                }
-            }
-        }
-
-        private void CmbPort_SelectedIndexChanged(object? sender, EventArgs e)
-        {
-            if (int.TryParse(cmbPort.SelectedItem?.ToString(), out int port))
-            {
-                currentPort = port;
-                Properties.Settings.Default.Port = port;
-                Properties.Settings.Default.Save();
-                
-                if (isRunning)
-                {
-                    StopServer();
-                    _ = StartServerAsync();
-                }
-            }
-        }
-
-        private void OpenSaveFolder()
-        {
-            System.Diagnostics.Process.Start(\"explorer.exe\", saveFolder);
-        }
-
-        private void ShowWindow()
-        {
-            if (InvokeRequired)
-            {
-                Invoke(new Action(ShowWindow));
-                return;
-            }
-            
-            this.Show();
-            this.WindowState = FormWindowState.Normal;
-            this.Activate();
-        }
-
-        private void CleanupAndExit()
-        {
-            if (isRunning)
-            {
-                StopServer();
-                System.Threading.Thread.Sleep(500);
-            }
-            notifyIcon.Visible = false;
-            Application.Exit();
-            Environment.Exit(0);
-        }
-
-        private void Form1_Resize(object? sender, EventArgs e)
-        {
-            if (this.WindowState == FormWindowState.Minimized)
-            {
-                this.Hide();
-            }
-        }
-
-        protected override void OnFormClosing(FormClosingEventArgs e)
-        {
-            if (e.CloseReason == CloseReason.UserClosing)
-            {
-                e.Cancel = true;
-                this.Hide();
-            }
-            base.OnFormClosing(e);
-        }
+        private void Log(string msg) { if (txtLog.InvokeRequired) { txtLog.Invoke(new Action(() => Log(msg))); return; } txtLog.AppendText($"[{DateTime.Now:HH:mm:ss}] {msg}{Environment.NewLine}"); txtLog.ScrollToCaret(); }
+        private void UpdateUI(bool r) { if (InvokeRequired) { Invoke(new Action(() => UpdateUI(r))); return; } btnStart.Enabled = !r; btnStop.Enabled = r; lblStatus.Text = r ? "✅ Статус: Работает" : "⭕ Статус: Остановлен"; lblStatus.ForeColor = r ? Color.Green : Color.Red; cmbPort.Enabled = !r; }
+        private void BtnBrowse_Click(object? s, EventArgs e) { using (var d = new FolderBrowserDialog()) { if (d.ShowDialog() == DialogResult.OK) { saveFolder = d.SelectedPath; txtSavePath.Text = saveFolder; } } }
+        private void CmbPort_SelectedIndexChanged(object? s, EventArgs e) { if (int.TryParse(cmbPort.SelectedItem?.ToString(), out int p)) currentPort = p; }
+        private void Form1_Resize(object? s, EventArgs e) { if (this.WindowState == FormWindowState.Minimized) this.Hide(); }
+        private string FormatBytes(long b) { string[] s = { "Б", "КБ", "МБ", "ГБ" }; double l = b; int o = 0; while (l >= 1024 && o < s.Length - 1) { o++; l /= 1024; } return $"{l:0.##} {s[o]}"; }
+        private void ShowWindow() { this.Show(); this.WindowState = FormWindowState.Normal; this.Activate(); }
+        private void OpenSaveFolder() { System.Diagnostics.Process.Start("explorer.exe", saveFolder); }
+        private void CleanupAndExit() { if (isRunning) StopServer(); Application.Exit(); Environment.Exit(0); }
     }
 }
