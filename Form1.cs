@@ -6,6 +6,8 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Threading.Tasks;
+using System.Collections.Generic;
+using System.Linq;
 
 namespace iPhoneSyncAgent
 {
@@ -137,121 +139,175 @@ namespace iPhoneSyncAgent
                 using (client)
                 using (var stream = client.GetStream())
                 {
-                    // Читаем заголовки
-                    string headers = "";
-                    byte[] singleByte = new byte[1];
-                    bool headersComplete = false;
-                    
-                    while (!headersComplete)
+                    // 1. Читаем запрос
+                    byte[] buffer = new byte[8192];
+                    int bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length);
+                    if (bytesRead == 0) return;
+
+                    string requestData = Encoding.UTF8.GetString(buffer, 0, bytesRead);
+                    string[] lines = requestData.Split(new[] { "\r\n" }, StringSplitOptions.None);
+                    if (lines.Length == 0) return;
+
+                    string firstLine = lines[0]; // Например: "POST /upload HTTP/1.1"
+                    string[] parts = firstLine.Split(' ');
+                    if (parts.Length < 2) return;
+
+                    string method = parts[0];
+                    string path = parts[1];
+
+                    // 2. Обработка CORS (важно для iPhone)
+                    if (method == "OPTIONS")
                     {
-                        byte[] lineBuffer = new byte[4096];
-                        int lineLength = 0;
-                        int lastByte = 0;
-                        
-                        while (true)
-                        {
-                            int bytesRead = await stream.ReadAsync(singleByte, 0, 1);
-                            if (bytesRead == 0) break;
-                            
-                            if (singleByte[0] == '\n')
-                            {
-                                if (lastByte == '\r')
-                                {
-                                    lineLength--;
-                                    string line = Encoding.UTF8.GetString(lineBuffer, 0, lineLength);
-                                    if (string.IsNullOrEmpty(line))
-                                    {
-                                        headersComplete = true;
-                                        break;
-                                    }
-                                    headers += line + "\r\n";
-                                    break;
-                                }
-                            }
-                            else
-                            {
-                                lineBuffer[lineLength] = singleByte[0];
-                                lineLength++;
-                            }
-                            lastByte = singleByte[0];
-                        }
-                        if (headersComplete) break;
-                    }
-                    
-                    // Разбираем заголовки
-                    string? fileName = null;
-                    string? fileDate = null;
-                    long fileSize = 0;
-                    
-                    var lines = headers.Split(new[] { "\r\n" }, StringSplitOptions.RemoveEmptyEntries);
-                    foreach (var line in lines)
-                    {
-                        if (line.StartsWith("X-File-Name:"))
-                            fileName = line.Substring(12).Trim();
-                        else if (line.StartsWith("X-File-Date:"))
-                            fileDate = line.Substring(12).Trim();
-                        else if (line.StartsWith("X-File-Size:"))
-                            long.TryParse(line.Substring(12).Trim(), out fileSize);
-                    }
-                    
-                    if (string.IsNullOrEmpty(fileName))
-                    {
-                        Log("❌ Ошибка: не указано имя файла");
+                        await SendResponseAsync(stream, "204 No Content", "", true);
                         return;
                     }
-                    
-                    Log($"📁 Получен файл: {fileName}, ожидается: {FormatBytes(fileSize)}");
-                    
-                    // Создаём папку
-                    DateTime photoDate = DateTime.TryParse(fileDate, out var date) ? date : DateTime.Now;
-                    string dateFolder = photoDate.ToString("yyyy-MM-dd");
-                    string fullPath = Path.Combine(saveFolder, dateFolder);
-                    Directory.CreateDirectory(fullPath);
-                    
-                    // Имя файла с датой
-                    string dateTimeStr = photoDate.ToString("yyyy-MM-dd_HH-mm-ss");
-                    string nameWithoutExt = Path.GetFileNameWithoutExtension(fileName);
-                    string ext = Path.GetExtension(fileName);
-                    string newFileName = $"{dateTimeStr}_{nameWithoutExt}{ext}";
-                    string filePath = Path.Combine(fullPath, newFileName);
-                    
-                    // Уникальность имени
-                    int counter = 1;
-                    while (File.Exists(filePath))
+
+                    // 3. Маршрутизация
+                    if (path == "/status" && method == "GET")
                     {
-                        newFileName = $"{dateTimeStr}_{nameWithoutExt}_{counter}{ext}";
-                        filePath = Path.Combine(fullPath, newFileName);
-                        counter++;
+                        string json = $"{{\"status\":\"ok\", \"port\":{currentPort}}}";
+                        await SendResponseAsync(stream, "200 OK", json, true, "application/json");
                     }
-                    
-                    // Сохраняем файл
-                    using (var fileStream = new FileStream(filePath, FileMode.Create, FileAccess.Write))
+                    else if (path == "/upload" && method == "POST")
                     {
-                        long totalRead = 0;
-                        byte[] buffer = new byte[8192];
-                        int bytesRead;
-                        
-                        while ((bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length)) > 0)
+                        await HandleFileUpload(stream, lines, buffer, bytesRead);
+                    }
+                    else
+                    {
+                        // Пытаемся отдать статические файлы (index.html, manifest.json и т.д.)
+                        string fileName = path == "/" ? "index.html" : path.TrimStart('/');
+                        if (File.Exists(fileName))
                         {
-                            await fileStream.WriteAsync(buffer, 0, bytesRead);
-                            totalRead += bytesRead;
+                            byte[] fileBytes = File.ReadAllBytes(fileName);
+                            string contentType = GetContentType(fileName);
+                            await SendRawResponseAsync(stream, "200 OK", fileBytes, contentType);
                         }
-                        
-                        Log($"📥 Сохранён: {newFileName} ({FormatBytes(totalRead)}) -> {fullPath}");
+                        else
+                        {
+                            await SendResponseAsync(stream, "404 Not Found", "Not Found", true);
+                        }
                     }
-                    
-                    // Отправляем ответ
-                    string responseText = "OK";
-                    byte[] response = Encoding.UTF8.GetBytes(responseText);
-                    await stream.WriteAsync(response, 0, response.Length);
-                    await stream.FlushAsync();
-                    Log("✅ Ответ отправлен клиенту");
                 }
             }
             catch (Exception ex)
             {
-                Log($"Ошибка: {ex.Message}");
+                Log($"Ошибка обработки запроса: {ex.Message}");
             }
+        }
+
+        private async Task HandleFileUpload(NetworkStream stream, string[] lines, byte[] initialBuffer, int initialBytesRead)
+        {
+            try
+            {
+                Dictionary<string, string> headers = new Dictionary<string, string>();
+                int headerEndIndex = 0;
+                
+                // Ищем конец заголовков в буфере
+                string rawContent = Encoding.UTF8.GetString(initialBuffer, 0, initialBytesRead);
+                headerEndIndex = rawContent.IndexOf("\r\n\r\n");
+                if (headerEndIndex == -1) return;
+                headerEndIndex += 4;
+
+                foreach (var line in lines.Skip(1))
+                {
+                    if (string.IsNullOrEmpty(line)) break;
+                    int colon = line.IndexOf(':');
+                    if (colon > 0)
+                        headers[line.Substring(0, colon).Trim()] = line.Substring(colon + 1).Trim();
+                }
+
+                headers.TryGetValue("X-File-Name", out string? fileName);
+                headers.TryGetValue("X-File-Date", out string? fileDate);
+                headers.TryGetValue("X-File-Size", out string? fileSizeStr);
+                long.TryParse(fileSizeStr, out long fileSize);
+
+                if (string.IsNullOrEmpty(fileName)) fileName = "upload_" + Guid.NewGuid().ToString().Substring(0, 8);
+                fileName = Uri.UnescapeDataString(fileName);
+
+                Log($"📥 Начало загрузки: {fileName} ({FormatBytes(fileSize)})");
+
+                // Формируем имя файла по вашему запросу: Дата_Время_УникальныйID
+                DateTime now = DateTime.Now;
+                string dateFolder = now.ToString("yyyy-MM-dd");
+                string fullPath = Path.Combine(saveFolder, dateFolder);
+                Directory.CreateDirectory(fullPath);
+
+                string uniqueId = Guid.NewGuid().ToString().Substring(0, 8);
+                string ext = Path.GetExtension(fileName);
+                string nameWithoutExt = Path.GetFileNameWithoutExtension(fileName);
+                string newFileName = $"{now:yyyy-MM-dd_HH-mm-ss}_{uniqueId}{ext}";
+                string filePath = Path.Combine(fullPath, newFileName);
+
+                using (var fileStream = new FileStream(filePath, FileMode.Create, FileAccess.Write))
+                {
+                    // Дописываем остаток из первого буфера
+                    int remainingInInitial = initialBytesRead - headerEndIndex;
+                    if (remainingInInitial > 0)
+                    {
+                        await fileStream.WriteAsync(initialBuffer, headerEndIndex, remainingInInitial);
+                    }
+
+                    long totalRead = remainingInInitial;
+                    byte[] buffer = new byte[65536];
+                    int bytesRead;
+
+                    while (totalRead < fileSize && (bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length)) > 0)
+                    {
+                        await fileStream.WriteAsync(buffer, 0, bytesRead);
+                        totalRead += bytesRead;
+                    }
+                }
+
+                Log($"✅ Файл сохранен: {newFileName}");
+                await SendResponseAsync(stream, "200 OK", "OK", true);
+            }
+            catch (Exception ex)
+            {
+                Log($"❌ Ошибка при сохранении: {ex.Message}");
+                await SendResponseAsync(stream, "500 Internal Server Error", ex.Message, true);
+            }
+        }
+
+        private async Task SendResponseAsync(NetworkStream stream, string status, string content, bool addCors, string contentType = "text/plain")
+        {
+            byte[] body = Encoding.UTF8.GetBytes(content);
+            await SendRawResponseAsync(stream, status, body, contentType, addCors);
+        }
+
+        private async Task SendRawResponseAsync(NetworkStream stream, string status, byte[] body, string contentType, bool addCors = true)
+        {
+            StringBuilder sb = new StringBuilder();
+            sb.Append($"HTTP/1.1 {status}\r\n");
+            sb.Append($"Content-Type: {contentType}\r\n");
+            sb.Append($"Content-Length: {body.Length}\r\n");
+            if (addCors)
+            {
+                sb.Append("Access-Control-Allow-Origin: *\r\n");
+                sb.Append("Access-Control-Allow-Methods: POST, GET, OPTIONS\r\n");
+                sb.Append("Access-Control-Allow-Headers: X-File-Name, X-File-Date, X-File-Size, Content-Type\r\n");
+            }
+            sb.Append("Connection: close\r\n");
+            sb.Append("\r\n");
+
+            byte[] header = Encoding.UTF8.GetBytes(sb.ToString());
+            await stream.WriteAsync(header, 0, header.Length);
+            await stream.WriteAsync(body, 0, body.Length);
+            await stream.FlushAsync();
+        }
+
+        private string GetContentType(string fileName)
+        {
+            string ext = Path.GetExtension(fileName).ToLower();
+            return ext switch
+            {
+                ".html" => "text/html",
+                ".json" => "application/json",
+                ".js" => "application/javascript",
+                ".css" => "text/css",
+                ".png" => "image/png",
+                ".jpg" => "image/jpeg",
+                _ => "application/octet-stream"
+            };
         }
 
         private void Log(string message)
@@ -270,7 +326,7 @@ namespace iPhoneSyncAgent
 
         private string FormatBytes(long bytes)
         {
-            string[] sizes = { "Б", "КБ", "МБ", "ГБ" };
+            string[] sizes = { \"Б\", \"КБ\", \"МБ\", \"ГБ\" };
             double len = bytes;
             int order = 0;
             while (len >= 1024 && order < sizes.Length - 1)
@@ -315,7 +371,7 @@ namespace iPhoneSyncAgent
 
         private void OpenSaveFolder()
         {
-            System.Diagnostics.Process.Start("explorer.exe", saveFolder);
+            System.Diagnostics.Process.Start(\"explorer.exe\", saveFolder);
         }
 
         private void ShowWindow()

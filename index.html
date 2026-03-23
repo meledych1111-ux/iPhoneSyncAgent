@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>iPhoneSync - отправка на ПК</title>
+    <link rel="manifest" href="manifest.json">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="iPhoneSync">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            background: #f5f5f5;
+            padding: 20px;
+            max-width: 600px;
+            margin: 0 auto;
+            padding-bottom: 100px;
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 24px;
+        }
+        .header h1 {
+            color: #2196F3;
+            font-size: 32px;
+        }
+        .header p {
+            color: #666;
+            font-size: 14px;
+            margin-top: 4px;
+        }
+        .card {
+            background: white;
+            border-radius: 16px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+        }
+        .status {
+            padding: 12px;
+            border-radius: 12px;
+            font-size: 14px;
+            margin: 12px 0;
+            text-align: center;
+        }
+        .status.online {
+            background: #e8f5e9;
+            color: #2e7d32;
+        }
+        .status.offline {
+            background: #ffebee;
+            color: #c62828;
+        }
+        .status.searching {
+            background: #fff3e0;
+            color: #ef6c00;
+        }
+        .ip-input {
+            width: 100%;
+            padding: 14px;
+            border: 1px solid #ddd;
+            border-radius: 12px;
+            font-size: 16px;
+            text-align: center;
+            background: white;
+        }
+        button {
+            padding: 14px;
+            border: none;
+            border-radius: 12px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            width: 100%;
+        }
+        button:active {
+            transform: scale(0.98);
+        }
+        .btn-primary {
+            background: #2196F3;
+            color: white;
+        }
+        .btn-send {
+            background: #4CAF50;
+            color: white;
+            margin-top: 16px;
+        }
+        .file-list {
+            background: white;
+            border-radius: 16px;
+            overflow: hidden;
+            margin-top: 8px;
+        }
+        .file-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 16px;
+            border-bottom: 1px solid #eee;
+        }
+        .file-item:last-child {
+            border-bottom: none;
+        }
+        .file-info {
+            flex: 1;
+        }
+        .file-name {
+            font-size: 14px;
+            font-weight: 500;
+            word-break: break-all;
+        }
+        .file-size {
+            font-size: 11px;
+            color: #999;
+            margin-top: 4px;
+        }
+        .remove-btn {
+            background: #ff4444;
+            color: white;
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            border: none;
+            cursor: pointer;
+        }
+        .empty-list {
+            text-align: center;
+            color: #999;
+            padding: 24px;
+        }
+        .section-title {
+            font-size: 16px;
+            font-weight: 600;
+            margin: 16px 0 8px;
+            color: #666;
+        }
+        .progress {
+            margin-top: 16px;
+            background: #e0e0e0;
+            border-radius: 10px;
+            overflow: hidden;
+            display: none;
+        }
+        .progress-bar {
+            width: 0%;
+            height: 24px;
+            background: #4CAF50;
+            transition: width 0.3s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        .toast {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #333;
+            color: white;
+            padding: 12px 20px;
+            border-radius: 30px;
+            z-index: 1000;
+            display: none;
+            font-size: 14px;
+            white-space: nowrap;
+        }
+        .warning {
+            font-size: 12px;
+            color: #d32f2f;
+            text-align: center;
+            margin-top: 10px;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>📱 iPhoneSync</h1>
+        <p>Отправка файлов на компьютер</p>
+    </div>
+
+    <div class="card">
+        <label>💻 IP компьютера</label>
+        <input type="text" id="pcIp" class="ip-input" placeholder="192.168.1.100">
+        <div class="status" id="pcStatus">
+            🔍 Введите IP компьютера
+        </div>
+        <button id="checkBtn" class="btn-primary">🔍 Проверить</button>
+        <div id="httpsWarning" class="warning">
+            ⚠️ Вы открыли сайт через HTTPS. Запросы к HTTP (ПК в сети) будут заблокированы браузером. <br>
+            Используйте браузер Chrome на Android или добавьте сайт в исключения безопасности.
+        </div>
+    </div>
+
+    <button id="selectFilesBtn" class="btn-primary">📁 Выбрать файлы</button>
+    <input type="file" id="fileInput" multiple style="display: none;">
+
+    <div class="section-title">📋 Выбранные файлы (<span id="filesCount">0</span>)</div>
+    <div class="file-list" id="fileList">
+        <div class="empty-list">Нет выбранных файлов</div>
+    </div>
+
+    <button id="sendBtn" class="btn-send">📤 Отправить на компьютер</button>
+
+    <div class="progress" id="progress">
+        <div class="progress-bar" id="progressBar">0%</div>
+    </div>
+
+    <div id="toast" class="toast"></div>
+
+    <script>
+        const PORT = 15000;
+        let selectedFiles = [];
+        let pcIp = localStorage.getItem('pcIp') || '';
+        let isOnline = false;
+
+        const fileInput = document.getElementById('fileInput');
+        const selectFilesBtn = document.getElementById('selectFilesBtn');
+        const sendBtn = document.getElementById('sendBtn');
+        const fileListDiv = document.getElementById('fileList');
+        const filesCountSpan = document.getElementById('filesCount');
+        const pcIpInput = document.getElementById('pcIp');
+        const checkBtn = document.getElementById('checkBtn');
+        const pcStatusDiv = document.getElementById('pcStatus');
+        const progressDiv = document.getElementById('progress');
+        const progressBar = document.getElementById('progressBar');
+        const toast = document.getElementById('toast');
+        const httpsWarning = document.getElementById('httpsWarning');
+
+        // Проверка HTTPS
+        if (window.location.protocol === 'https:') {
+            httpsWarning.style.display = 'block';
+        }
+
+        // Регистрация Service Worker
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('sw.js').then(() => {
+                console.log('SW registered');
+            }).catch(console.error);
+
+            // Слушаем входящие файлы от SW (Share Target)
+            navigator.serviceWorker.addEventListener('message', (event) => {
+                if (event.data && event.data.type === 'SHARE_TARGET_FILES') {
+                    selectedFiles.push(...event.data.files);
+                    updateFileList();
+                    showToast('📥 Файлы получены из "Поделиться"');
+                }
+            });
+        }
+
+        // Если IP не задан, пробуем текущий хост (если зашли по IP)
+        if (!pcIp && window.location.hostname !== 'localhost' && !window.location.hostname.includes('github.io')) {
+            pcIp = window.location.hostname;
+        }
+
+        if (pcIp) {
+            pcIpInput.value = pcIp;
+            checkConnection();
+        }
+
+        selectFilesBtn.addEventListener('click', () => fileInput.click());
+        sendBtn.addEventListener('click', sendFiles);
+        checkBtn.addEventListener('click', checkConnection);
+
+        fileInput.addEventListener('change', (e) => {
+            const files = Array.from(e.target.files);
+            selectedFiles.push(...files);
+            updateFileList();
+            fileInput.value = '';
+        });
+
+        function updateFileList() {
+            filesCountSpan.textContent = selectedFiles.length;
+            if (selectedFiles.length === 0) {
+                fileListDiv.innerHTML = '<div class="empty-list">Нет выбранных файлов</div>';
+                return;
+            }
+            fileListDiv.innerHTML = selectedFiles.map((file, index) => `
+                <div class="file-item">
+                    <div class="file-info">
+                        <div class="file-name">${escapeHtml(file.name)}</div>
+                        <div class="file-size">${formatSize(file.size)}</div>
+                    </div>
+                    <button class="remove-btn" data-index="${index}">✕</button>
+                </div>
+            `).join('');
+            document.querySelectorAll('.remove-btn').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    selectedFiles.splice(parseInt(btn.dataset.index), 1);
+                    updateFileList();
+                });
+            });
+        }
+
+        function escapeHtml(str) {
+            return str.replace(/[&<>]/g, m => m === '&' ? '&amp;' : m === '<' ? '&lt;' : '&gt;');
+        }
+
+        function formatSize(bytes) {
+            if (bytes < 1024) return bytes + ' Б';
+            if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' КБ';
+            return (bytes / (1024 * 1024)).toFixed(1) + ' МБ';
+        }
+
+        async function checkConnection() {
+            const ip = pcIpInput.value.trim();
+            if (!ip) {
+                pcStatusDiv.innerHTML = '❌ Введите IP компьютера';
+                pcStatusDiv.className = 'status offline';
+                isOnline = false;
+                return;
+            }
+
+            pcStatusDiv.innerHTML = '🔄 Проверка...';
+            pcStatusDiv.className = 'status searching';
+            localStorage.setItem('pcIp', ip);
+
+            try {
+                const controller = new AbortController();
+                setTimeout(() => controller.abort(), 3000);
+                const response = await fetch(`http://${ip}:${PORT}/status`, { 
+                    mode: 'cors',
+                    signal: controller.signal 
+                });
+                if (response.ok) {
+                    const data = await response.json();
+                    pcStatusDiv.innerHTML = `✅ Компьютер найден (порт ${data.port})`;
+                    pcStatusDiv.className = 'status online';
+                    isOnline = true;
+                } else throw new Error();
+            } catch (e) {
+                let msg = '❌ Компьютер не отвечает. Убедитесь, что агент запущен (порт 15000)';
+                if (window.location.protocol === 'https:') {
+                    msg = '❌ Ошибка смешанного контента (HTTPS -> HTTP). Используйте IP адрес напрямую.';
+                }
+                pcStatusDiv.innerHTML = msg;
+                pcStatusDiv.className = 'status offline';
+                isOnline = false;
+            }
+        }
+
+        async function sendFiles() {
+            if (selectedFiles.length === 0) { showToast('📁 Выберите файлы'); return; }
+            if (!isOnline) { showToast('💻 Компьютер не подключён'); return; }
+
+            const ip = pcIpInput.value.trim();
+            let success = 0, failed = 0;
+
+            progressDiv.style.display = 'block';
+            for (let i = 0; i < selectedFiles.length; i++) {
+                const file = selectedFiles[i];
+                const percent = Math.round(((i + 1) / selectedFiles.length) * 100);
+                progressBar.style.width = `${percent}%`;
+                progressBar.textContent = `${percent}%`;
+                showToast(`📤 ${i + 1}/${selectedFiles.length}: ${file.name.substring(0, 30)}`);
+                
+                try {
+                    const today = new Date().toISOString().split('T')[0];
+                    const fileName = encodeURIComponent(file.name);
+                    
+                    const response = await fetch(`http://${ip}:${PORT}/upload`, {
+                        method: 'POST',
+                        mode: 'cors',
+                        headers: {
+                            'X-File-Name': fileName,
+                            'X-File-Date': today,
+                            'X-File-Size': file.size.toString(),
+                            'Content-Type': 'application/octet-stream'
+                        },
+                        body: file
+                    });
+                    
+                    if (response.ok) {
+                        success++;
+                    } else {
+                        failed++;
+                    }
+                } catch (e) {
+                    failed++;
+                }
+            }
+
+            progressDiv.style.display = 'none';
+            showToast(failed === 0 ? `✅ Отправлено ${success} файлов!` : `⚠️ Отправлено: ${success}, ошибок: ${failed}`);
+            if (failed === 0) { selectedFiles = []; updateFileList(); }
+        }
+
+        function showToast(msg) {
+            toast.textContent = msg;
+            toast.style.display = 'block';
+            setTimeout(() => toast.style.display = 'none', 2500);
+        }
+    </script>
+</body>
+</html>
