@@ -1,0 +1,23 @@
+# Visual Studio
+.vs/
+bin/
+obj/
+Debug/
+Release/
+*.user
+*.suo
+*.sln.docstates
+*.cache
+*.log
+
+# Build
+*.exe
+*.dll
+*.pdb
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temp
+*.tmp
