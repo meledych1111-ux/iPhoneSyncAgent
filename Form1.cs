@@ -50,10 +50,10 @@ namespace iPhoneSyncAgent
         {
             contextMenuStrip = new ContextMenuStrip();
             contextMenuStrip.Items.Add("📂 Открыть", null, (s, e) => ShowWindow());
-            contextMenuStrip.Items.Add("📁 Папка", null, (s, e) => OpenSaveFolder());
+            contextMenuStrip.Items.Add("📁 Папка сохранения", null, (s, e) => OpenSaveFolder());
             contextMenuStrip.Items.Add("-");
-            contextMenuStrip.Items.Add("▶ Старт", null, async (s, e) => await StartServerAsync());
-            contextMenuStrip.Items.Add("⏹ Стоп", null, (s, e) => StopServer());
+            contextMenuStrip.Items.Add("▶ Запустить", null, async (s, e) => await StartServerAsync());
+            contextMenuStrip.Items.Add("⏹ Остановить", null, (s, e) => StopServer());
             contextMenuStrip.Items.Add("-");
             contextMenuStrip.Items.Add("❌ Выход", null, (s, e) => CleanupAndExit());
             
@@ -71,9 +71,10 @@ namespace iPhoneSyncAgent
                 isRunning = true;
                 UpdateUI(true);
                 Log($"✅ Сервер запущен на порту {currentPort}");
+                Log($"📁 Папка сохранения: {saveFolder}");
                 _ = Task.Run(() => HandleClientsAsync());
             }
-            catch (Exception ex) { Log($"❌ Ошибка: {ex.Message}"); }
+            catch (Exception ex) { Log($"❌ Ошибка запуска: {ex.Message}"); }
         }
 
         private void StopServer()
@@ -105,57 +106,62 @@ namespace iPhoneSyncAgent
                 using (client)
                 using (var stream = client.GetStream())
                 {
-                    byte[] buffer = new byte[16384];
+                    byte[] buffer = new byte[8192];
                     int bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length);
                     if (bytesRead == 0) return;
 
-                    string requestData = Encoding.UTF8.GetString(buffer, 0, bytesRead);
-                    string[] lines = requestData.Split(new[] { "\r\n" }, StringSplitOptions.None);
+                    string request = Encoding.UTF8.GetString(buffer, 0, bytesRead);
+                    string[] lines = request.Split(new[] { "\r\n" }, StringSplitOptions.None);
                     if (lines.Length == 0) return;
 
-                    string[] parts = lines[0].Split(' ');
+                    string firstLine = lines[0];
+                    string[] parts = firstLine.Split(' ');
                     if (parts.Length < 2) return;
 
                     string method = parts[0];
                     string path = parts[1];
 
-                    // 1. CORS для iPhone
+                    // 1. Обработка CORS (важно для Safari)
                     if (method == "OPTIONS")
                     {
                         await SendResponseAsync(stream, "204 No Content", "", true);
                         return;
                     }
 
-                    // 2. Статус (Проверка API)
+                    // 2. Маршрутизация
                     if (path.StartsWith("/status"))
                     {
                         await SendResponseAsync(stream, "200 OK", "{\"status\":\"ok\",\"port\":15000}", true, "application/json");
-                        return;
                     }
-
-                    // 3. Загрузка файла
-                    if (path.StartsWith("/upload") && method == "POST")
+                    else if (path.StartsWith("/upload") && method == "POST")
                     {
                         await HandleFileUpload(stream, lines, buffer, bytesRead);
-                        return;
                     }
-
-                    // 4. Интерфейс (PWA)
-                    string requestedFile = path == "/" ? "index.html" : path.TrimStart('/');
-                    string fullFilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, requestedFile);
-                    
-                    // Поиск в корне, если в bin нет
-                    if (!File.Exists(fullFilePath))
-                        fullFilePath = Path.Combine(Directory.GetParent(AppDomain.CurrentDomain.BaseDirectory).Parent.Parent.FullName, requestedFile);
-
-                    if (File.Exists(fullFilePath))
+                    else if (method == "GET")
                     {
-                        byte[] fileBytes = File.ReadAllBytes(fullFilePath);
-                        await SendRawResponseAsync(stream, "200 OK", fileBytes, GetContentType(fullFilePath));
-                    }
-                    else
-                    {
-                        await SendResponseAsync(stream, "404 Not Found", "File Not Found", true);
+                        // Пытаемся отдать файл (index.html, manifest.json и т.д.)
+                        string fileName = path == "/" ? "index.html" : path.TrimStart('/');
+                        
+                        // Игнорируем иконки, чтобы не мусорить в логах
+                        if (fileName.EndsWith(".ico") || fileName.Contains("apple-touch-icon")) {
+                            await SendResponseAsync(stream, "404 Not Found", "", false);
+                            return;
+                        }
+
+                        // Ищем файл в папке проекта (на уровень выше от bin)
+                        string fullPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, fileName);
+                        if (!File.Exists(fullPath)) {
+                             // Для отладки в VS ищем в корне проекта
+                             fullPath = Path.Combine(Directory.GetParent(AppDomain.CurrentDomain.BaseDirectory).Parent.Parent.FullName, fileName);
+                        }
+
+                        if (File.Exists(fullPath)) {
+                            byte[] fileBytes = File.ReadAllBytes(fullPath);
+                            await SendRawResponseAsync(stream, "200 OK", fileBytes, GetContentType(fileName));
+                        } else {
+                            Log($"⚠ Файл не найден: {fileName}");
+                            await SendResponseAsync(stream, "404 Not Found", "File Not Found", true);
+                        }
                     }
                 }
             }
@@ -167,8 +173,7 @@ namespace iPhoneSyncAgent
             var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             int headerEndIndex = Encoding.UTF8.GetString(initialBuffer, 0, initialBytesRead).IndexOf("\r\n\r\n") + 4;
 
-            foreach (var line in lines.Skip(1))
-            {
+            foreach (var line in lines.Skip(1)) {
                 if (string.IsNullOrEmpty(line)) break;
                 int colon = line.IndexOf(':');
                 if (colon > 0) headers[line.Substring(0, colon).Trim()] = line.Substring(colon + 1).Trim();
@@ -187,42 +192,38 @@ namespace iPhoneSyncAgent
             string targetDir = Path.Combine(saveFolder, DateTime.Now.ToString("yyyy-MM-dd"));
             Directory.CreateDirectory(targetDir);
 
-            string finalName = $"{DateTime.Now:yyyy-MM-dd_HH-mm-ss}_{Guid.NewGuid().ToString().Substring(0,8)}{Path.GetExtension(fileName)}";
+            string uniqueId = Guid.NewGuid().ToString().Substring(0, 8);
+            string finalName = $"{DateTime.Now:yyyy-MM-dd_HH-mm-ss}_{uniqueId}{Path.GetExtension(fileName)}";
             string filePath = Path.Combine(targetDir, finalName);
 
-            using (var fs = new FileStream(filePath, FileMode.Create))
-            {
+            using (var fs = new FileStream(filePath, FileMode.Create)) {
                 int remaining = initialBytesRead - headerEndIndex;
                 if (remaining > 0) await fs.WriteAsync(initialBuffer, headerEndIndex, remaining);
                 long totalRead = remaining;
                 byte[] buf = new byte[65536];
-                while (totalRead < fileSize)
-                {
+                while (totalRead < fileSize) {
                     int r = await stream.ReadAsync(buf, 0, buf.Length);
                     if (r == 0) break;
                     await fs.WriteAsync(buf, 0, r);
                     totalRead += r;
                 }
             }
-            Log($"📥 Файл получен: {finalName}");
+            Log($"📥 Принят файл: {finalName}");
             await SendResponseAsync(stream, "200 OK", "OK", true);
         }
 
         private async Task SendResponseAsync(NetworkStream stream, string status, string content, bool addCors, string contentType = "text/plain")
         {
             byte[] body = Encoding.UTF8.GetBytes(content);
-            string head = $"HTTP/1.1 {status}\r\nContent-Type: {contentType}\r\nContent-Length: {body.Length}\r\n" +
-                          (addCors ? "Access-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: *\r\nAccess-Control-Allow-Headers: *\r\n" : "") +
-                          "Connection: close\r\n\r\n";
-            byte[] hBytes = Encoding.UTF8.GetBytes(head);
-            await stream.WriteAsync(hBytes, 0, hBytes.Length);
-            await stream.WriteAsync(body, 0, body.Length);
+            await SendRawResponseAsync(stream, status, body, contentType, addCors);
         }
 
-        private async Task SendRawResponseAsync(NetworkStream stream, string status, byte[] body, string contentType)
+        private async Task SendRawResponseAsync(NetworkStream stream, string status, byte[] body, string contentType, bool addCors = true)
         {
-            string head = $"HTTP/1.1 {status}\r\nContent-Type: {contentType}\r\nContent-Length: {body.Length}\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n";
-            byte[] hBytes = Encoding.UTF8.GetBytes(head);
+            string headers = $"HTTP/1.1 {status}\r\nContent-Type: {contentType}\r\nContent-Length: {body.Length}\r\n" +
+                             (addCors ? "Access-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: *\r\nAccess-Control-Allow-Headers: *\r\n" : "") +
+                             "Connection: close\r\n\r\n";
+            byte[] hBytes = Encoding.UTF8.GetBytes(headers);
             await stream.WriteAsync(hBytes, 0, hBytes.Length);
             await stream.WriteAsync(body, 0, body.Length);
         }
