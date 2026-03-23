@@ -31,14 +31,13 @@
     <div class="header"><h1>📱 iPhoneSync</h1><p>Передача файлов на ПК</p></div>
 
     <div class="card">
-        <input type="text" id="pcIp" class="ip-input" placeholder="Введите IP (например 192.168.1.50)">
+        <input type="text" id="pcIp" class="ip-input" placeholder="Введите IP компьютера">
         <button id="checkBtn" class="btn-blue">🔍 Проверить связь</button>
         <div id="pcStatus" class="status offline">🔴 Не подключен</div>
-        <div id="httpsWarning" class="warning">⚠️ Вы используете HTTPS. Локальная сеть будет заблокирована. Используйте http://</div>
     </div>
 
     <div class="card">
-        <button id="selectFilesBtn" class="btn-blue">📁 Выбрать файлы (Любые)</button>
+        <button id="selectFilesBtn" class="btn-blue">📁 Выбрать файлы</button>
         <input type="file" id="fileInput" multiple style="display: none;">
         <div id="fileList" class="file-list"></div>
         <button id="sendBtn" class="btn-green" style="display: none;">📤 Отправить на компьютер</button>
@@ -57,17 +56,20 @@
         const progressBar = document.getElementById('progressBar');
         const progressDiv = document.getElementById('progress');
 
-        // Авто-заполнение IP
         pcIpInput.value = localStorage.getItem('pcIp') || '';
-        if (window.location.protocol === 'https:') document.getElementById('httpsWarning').style.display = 'block';
 
         document.getElementById('checkBtn').onclick = checkConnection;
         document.getElementById('selectFilesBtn').onclick = () => document.getElementById('fileInput').click();
         
         document.getElementById('fileInput').onchange = (e) => {
-            selectedFiles = Array.from(e.target.files);
-            renderFiles();
+            addFiles(Array.from(e.target.files));
         };
+
+        function addFiles(files) {
+            selectedFiles.push(...files);
+            renderFiles();
+            if (isOnline) sendBtn.style.display = 'block';
+        }
 
         function renderFiles() {
             fileList.innerHTML = selectedFiles.map(f => `<div class="file-item"><span>${f.name}</span><span>${(f.size/1024/1024).toFixed(2)} MB</span></div>`).join('');
@@ -76,17 +78,15 @@
 
         async function checkConnection() {
             const ip = pcIpInput.value.trim();
-            if (!ip) return alert('Введите IP!');
+            if (!ip) return;
             localStorage.setItem('pcIp', ip);
-            pcStatus.innerHTML = '🔄 Проверка...';
-            
             try {
-                const res = await fetch(`http://${ip}:${PORT}/status`, { mode: 'cors' });
+                const res = await fetch(`http://${ip}:${PORT}/status`);
                 if (res.ok) {
                     pcStatus.innerHTML = '✅ Связь установлена!';
                     pcStatus.className = 'status online';
                     isOnline = true;
-                } else throw new Error();
+                }
             } catch (e) {
                 pcStatus.innerHTML = '❌ ПК не отвечает';
                 pcStatus.className = 'status offline';
@@ -95,33 +95,23 @@
         }
 
         async function sendFiles() {
-            if (!isOnline) return alert('Сначала проверьте связь!');
             const ip = pcIpInput.value.trim();
             progressDiv.style.display = 'block';
-            
             for (let i = 0; i < selectedFiles.length; i++) {
                 const file = selectedFiles[i];
-                const percent = ((i / selectedFiles.length) * 100);
-                progressBar.style.width = percent + '%';
-
+                progressBar.style.width = ((i / selectedFiles.length) * 100) + '%';
                 try {
                     await fetch(`http://${ip}:${PORT}/upload`, {
                         method: 'POST',
                         mode: 'cors',
-                        headers: {
-                            'X-File-Name': encodeURIComponent(file.name),
-                            'X-File-Size': file.size.toString()
-                        },
+                        headers: { 'X-File-Name': encodeURIComponent(file.name), 'X-File-Size': file.size.toString() },
                         body: file
                     });
-                } catch (e) {
-                    alert('Ошибка при передаче: ' + file.name);
-                }
+                } catch (e) { console.error(e); }
             }
-            
             progressBar.style.width = '100%';
             setTimeout(() => {
-                alert('🎉 Все файлы успешно отправлены!');
+                alert('🎉 Файлы отправлены!');
                 progressDiv.style.display = 'none';
                 selectedFiles = [];
                 renderFiles();
@@ -130,9 +120,14 @@
 
         sendBtn.onclick = sendFiles;
 
-        // Регистрация SW для PWA
+        // ЛОВИМ ФАЙЛЫ ИЗ МЕНЮ "ПОДЕЛИТЬСЯ"
         if ('serviceWorker' in navigator) {
             navigator.serviceWorker.register('sw.js');
+            navigator.serviceWorker.addEventListener('message', (event) => {
+                if (event.data && event.data.type === 'SHARE_TARGET_FILES') {
+                    addFiles(event.data.files);
+                }
+            });
         }
     </script>
 </body>
