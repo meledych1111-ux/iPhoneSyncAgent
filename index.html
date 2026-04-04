@@ -97,22 +97,17 @@
                 statusText.innerText = '';
                 return;
             }
-            
-            // ОПТИМИЗАЦИЯ: Если файлов много, показываем только последние 10, чтобы телефон не тормозил
             const showFiles = selectedFiles.slice(-10);
             const hiddenCount = selectedFiles.length - showFiles.length;
-            
             let html = showFiles.map(f => `
                 <div class="file-item">
                     <span style="max-width:70%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${f.name}</span>
                     <span style="color:#888;">${(f.size/1024/1024).toFixed(1)} MB</span>
                 </div>
             `).join('');
-            
             if (hiddenCount > 0) {
                 html = `<div style="text-align:center;padding:10px;color:#888;font-size:12px;">... и еще ${hiddenCount} объектов ...</div>` + html;
             }
-            
             fileList.innerHTML = html;
             if (isOnline && !isUploading) { sendBtn.style.display = 'block'; clearBtn.style.display = 'block'; }
             statusText.innerText = `ВЫБРАНО: ${selectedFiles.length} ОБЪЕКТОВ`;
@@ -154,26 +149,28 @@
             if (!isOnline || isUploading || selectedFiles.length === 0) return;
             const ip = pcIpInput.value.trim() || DEFAULT_IP;
             
+            const totalToUpload = selectedFiles.length;
             isUploading = true;
             sendBtn.disabled = true;
             clearBtn.style.display = 'none';
             progressDiv.style.display = 'block';
             
-            const totalFiles = selectedFiles.length;
             const filesCopy = [...selectedFiles];
+            let successCount = 0;
 
             for (let i = 0; i < filesCopy.length; i++) {
                 const file = filesCopy[i];
-                statusText.innerText = `ОТПРАВКА ${i + 1} ИЗ ${totalFiles}`;
+                statusText.innerText = `ОТПРАВКА ${i + 1} ИЗ ${totalToUpload}`;
                 
                 try {
                     await uploadFile(file, ip, (loaded, total) => {
                         const filePercent = Math.round((loaded / total) * 100);
-                        const totalPercent = Math.round(((i / totalFiles) * 100) + (filePercent / totalFiles));
+                        const totalPercent = Math.round(((i / totalToUpload) * 100) + (filePercent / totalToUpload));
                         progressBar.style.width = totalPercent + '%';
                         pText.innerText = `${totalPercent}% (Файл: ${filePercent}%)`;
                     });
                     selectedFiles = selectedFiles.filter(f => f !== file);
+                    successCount++;
                     renderFiles();
                 } catch (e) {
                     console.error('Error:', file.name);
@@ -184,8 +181,14 @@
             isUploading = false;
             sendBtn.disabled = false;
             progressDiv.style.display = 'none';
-            if (selectedFiles.length === 0) alert('🎉 Все 748 файлов переданы!');
-            else alert('⚠️ Прервано. Осталось: ' + selectedFiles.length);
+            
+            if (successCount > 0) {
+                alert(`🎉 Успешно передано объектов: ${successCount}`);
+            }
+            
+            if (selectedFiles.length > 0) {
+                alert(`⚠️ Передача прервана. Осталось: ${selectedFiles.length} объектов.`);
+            }
             renderFiles();
         }
 
