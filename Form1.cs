@@ -85,7 +85,6 @@ namespace iPhoneSyncAgent
                 using (var stream = client.GetStream()) {
                     stream.ReadTimeout = 30000; // 30 сек на чтение
                     
-                    // 1. Читаем заголовки целиком до разделителя \r\n\r\n
                     byte[] headerBuffer = new byte[16384];
                     int totalRead = 0;
                     int headerEndIndex = -1;
@@ -158,7 +157,6 @@ namespace iPhoneSyncAgent
             string dir = Path.Combine(saveFolder, DateTime.Now.ToString("yyyy-MM-dd"));
             Directory.CreateDirectory(dir);
             
-            // Очистка имени от запрещенных символов
             string safeName = string.Join("_", fileName.Split(Path.GetInvalidFileNameChars()));
             string finalPath = Path.Combine(dir, $"{DateTime.Now:HH-mm-ss}_{Guid.NewGuid().ToString().Substring(0,4)}_{safeName}");
 
@@ -170,10 +168,7 @@ namespace iPhoneSyncAgent
                 while (total < fileSize) {
                     int toRead = (int)Math.Min(buf.Length, fileSize - total);
                     int r = await stream.ReadAsync(buf, 0, toRead);
-                    if (r == 0) {
-                        if (total < fileSize) throw new Exception("Соединение прервано");
-                        break;
-                    }
+                    if (r == 0) break;
                     await fs.WriteAsync(buf, 0, r);
                     total += r;
                 }
