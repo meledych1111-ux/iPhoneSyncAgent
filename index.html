@@ -21,39 +21,44 @@
         .ip-input:focus { border-color: #007AFF; }
         button { width: 100%; padding: 16px; border: none; border-radius: 14px; font-size: 17px; font-weight: 700; cursor: pointer; transition: 0.2s; -webkit-appearance: none; }
         button:active { transform: scale(0.98); opacity: 0.9; }
-        button:disabled { background: #ccc !important; cursor: not-allowed; }
+        button:disabled { background: #ccc !important; }
         .btn-blue { background: #007AFF; color: white; margin-bottom: 12px; }
         .btn-green { background: #34C759; color: white; margin-top: 12px; }
         .btn-red { background: #FF3B30; color: white; margin-top: 8px; padding: 10px; font-size: 14px; }
-        .file-list { margin-top: 15px; background: #FFF; border-radius: 14px; max-height: 300px; overflow-y: auto; }
-        .file-item { padding: 12px 16px; border-bottom: 1px solid #F0F0F0; display: flex; justify-content: space-between; align-items: center; }
-        .progress { height: 12px; background: #E0E0E0; border-radius: 6px; margin-top: 20px; display: none; overflow: hidden; }
-        .progress-bar { width: 0%; height: 100%; background: #34C759; transition: 0.3s; }
-        .warning { color: #FF3B30; font-size: 13px; margin-top: 12px; display: none; text-align: center; padding: 10px; background: #FFF3F2; border-radius: 10px; }
+        .file-list { margin-top: 15px; background: #FFF; border-radius: 14px; max-height: 250px; overflow-y: auto; }
+        .file-item { padding: 10px 16px; border-bottom: 1px solid #F0F0F0; display: flex; justify-content: space-between; align-items: center; font-size: 14px; }
+        .progress { height: 16px; background: #E0E0E0; border-radius: 8px; margin-top: 20px; display: none; overflow: hidden; position: relative; }
+        .progress-bar { width: 0%; height: 100%; background: #34C759; transition: 0.1s; }
+        .progress-text { position: absolute; width: 100%; text-align: center; font-size: 11px; color: #000; font-weight: bold; line-height: 16px; }
     </style>
 </head>
 <body>
-    <div class="header"><h1>📱 iPhoneSync</h1><p>Передача файлов на Ваш ПК</p></div>
+    <div class="header"><h1>📱 iPhoneSync</h1><p>Оригинальное качество файлов</p></div>
 
     <div class="card">
-        <label style="display:block;margin-bottom:8px;font-size:13px;color:#888;text-align:center;">IP АДРЕС ВАШЕГО КОМПЬЮТЕРА</label>
-        <input type="text" id="pcIp" class="ip-input" placeholder="Напр: 192.168.1.50">
+        <label style="display:block;margin-bottom:8px;font-size:12px;color:#888;text-align:center;">IP АДРЕС КОМПЬЮТЕРА</label>
+        <input type="text" id="pcIp" class="ip-input" placeholder="Напр: 192.168.31.199">
         <button id="checkBtn" class="btn-blue">🔍 Проверить связь</button>
         <div id="pcStatus" class="status offline">🔴 Не подключен</div>
     </div>
 
     <div class="card">
-        <button id="selectFilesBtn" class="btn-blue">📁 Выбрать фото/файлы</button>
+        <button id="selectFilesBtn" class="btn-blue">📁 Выбрать фото и видео</button>
         <input type="file" id="fileInput" multiple style="display: none;">
         <div id="fileList" class="file-list"></div>
-        <button id="clearBtn" class="btn-red" style="display: none;">🗑 Очистить всё</button>
+        <button id="clearBtn" class="btn-red" style="display: none;">🗑 Очистить список</button>
         <button id="sendBtn" class="btn-green" style="display: none;">📤 Отправить на компьютер</button>
-        <div class="progress" id="progress"><div class="progress-bar" id="progressBar"></div></div>
-        <div id="statusText" style="text-align:center;font-size:13px;margin-top:8px;color:#666;"></div>
+        
+        <div class="progress" id="progress">
+            <div class="progress-bar" id="progressBar"></div>
+            <div class="progress-text" id="pText">0%</div>
+        </div>
+        <div id="statusText" style="text-align:center;font-size:13px;margin-top:10px;color:#444;font-weight:600;"></div>
     </div>
 
     <script>
         const PORT = 15000;
+        const DEFAULT_IP = "192.168.31.199";
         let selectedFiles = [];
         let isOnline = false;
         let isUploading = false;
@@ -66,29 +71,23 @@
         const progressBar = document.getElementById('progressBar');
         const progressDiv = document.getElementById('progress');
         const statusText = document.getElementById('statusText');
+        const pText = document.getElementById('pText');
 
-        pcIpInput.value = localStorage.getItem('pcIp') || '';
+        // Сначала пробуем из памяти, если пусто - ставим твой IP
+        pcIpInput.value = localStorage.getItem('pcIp') || DEFAULT_IP;
 
         document.getElementById('checkBtn').onclick = checkConnection;
-        document.getElementById('selectFilesBtn').onclick = () => {
-            if (!isUploading) document.getElementById('fileInput').click();
-        };
+        document.getElementById('selectFilesBtn').onclick = () => !isUploading && document.getElementById('fileInput').click();
         
         document.getElementById('fileInput').onchange = (e) => {
-            const newFiles = Array.from(e.target.files);
-            newFiles.forEach(nf => {
-                const exists = selectedFiles.some(f => f.name === nf.name && f.size === nf.size);
-                if (!exists) selectedFiles.push(nf);
+            Array.from(e.target.files).forEach(nf => {
+                if (!selectedFiles.some(f => f.name === nf.name && f.size === nf.size)) selectedFiles.push(nf);
             });
             e.target.value = '';
             renderFiles();
         };
 
-        clearBtn.onclick = () => {
-            if (isUploading) return;
-            selectedFiles = [];
-            renderFiles();
-        };
+        clearBtn.onclick = () => { if (!isUploading) { selectedFiles = []; renderFiles(); } };
 
         function renderFiles() {
             if (selectedFiles.length === 0) {
@@ -101,19 +100,15 @@
             fileList.innerHTML = selectedFiles.map(f => `
                 <div class="file-item">
                     <span style="max-width:70%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${f.name}</span>
-                    <span style="color:#888;font-size:12px;">${(f.size/1024/1024).toFixed(1)} MB</span>
+                    <span style="color:#888;">${(f.size/1024/1024).toFixed(1)} MB</span>
                 </div>
             `).join('');
-            if (isOnline && !isUploading) {
-                sendBtn.style.display = 'block';
-                clearBtn.style.display = 'block';
-            }
-            statusText.innerText = `Выбрано файлов: ${selectedFiles.length}`;
+            if (isOnline && !isUploading) { sendBtn.style.display = 'block'; clearBtn.style.display = 'block'; }
+            statusText.innerText = `Выбрано: ${selectedFiles.length}`;
         }
 
         async function checkConnection() {
-            const ip = pcIpInput.value.trim();
-            if (!ip) return;
+            const ip = pcIpInput.value.trim() || DEFAULT_IP;
             localStorage.setItem('pcIp', ip);
             pcStatus.innerHTML = '🔄 Проверка...';
             try {
@@ -131,9 +126,26 @@
             }
         }
 
+        function uploadFile(file, ip, onProgress) {
+            return new Promise((resolve, reject) => {
+                const xhr = new XMLHttpRequest();
+                xhr.open('POST', `http://${ip}:${PORT}/upload`);
+                xhr.setRequestHeader('X-File-Name', encodeURIComponent(file.name));
+                xhr.setRequestHeader('X-File-Size', file.size.toString());
+                
+                xhr.upload.onprogress = (e) => {
+                    if (e.lengthComputable) onProgress(e.loaded, e.total);
+                };
+                
+                xhr.onload = () => xhr.status === 200 ? resolve() : reject();
+                xhr.onerror = () => reject();
+                xhr.send(file);
+            });
+        }
+
         async function sendFiles() {
             if (!isOnline || isUploading || selectedFiles.length === 0) return;
-            const ip = pcIpInput.value.trim();
+            const ip = pcIpInput.value.trim() || DEFAULT_IP;
             
             isUploading = true;
             sendBtn.disabled = true;
@@ -141,55 +153,34 @@
             progressDiv.style.display = 'block';
             
             const totalFiles = selectedFiles.length;
-            let currentIdx = 0;
+            const filesCopy = [...selectedFiles];
 
-            // Копируем список, чтобы итерироваться по нему
-            const filesToUpload = [...selectedFiles];
-
-            for (const file of filesToUpload) {
-                currentIdx++;
-                const percent = Math.round(((currentIdx-1) / totalFiles) * 100);
-                progressBar.style.width = percent + '%';
-                statusText.innerText = `Отправка ${currentIdx} из ${totalFiles}: ${file.name}`;
-
+            for (let i = 0; i < filesCopy.length; i++) {
+                const file = filesCopy[i];
+                statusText.innerText = `Файл ${i + 1} из ${totalFiles}: ${file.name}`;
+                
                 try {
-                    const res = await fetch(`http://${ip}:${PORT}/upload`, {
-                        method: 'POST',
-                        mode: 'cors',
-                        headers: {
-                            'X-File-Name': encodeURIComponent(file.name),
-                            'X-File-Size': file.size.toString()
-                        },
-                        body: file
+                    await uploadFile(file, ip, (loaded, total) => {
+                        const filePercent = Math.round((loaded / total) * 100);
+                        const totalPercent = Math.round(((i / totalFiles) * 100) + (filePercent / totalFiles));
+                        progressBar.style.width = totalPercent + '%';
+                        pText.innerText = `${totalPercent}% (Файл: ${filePercent}%)`;
                     });
 
-                    if (res.ok) {
-                        // УДАЛЯЕМ УСПЕШНО ОТПРАВЛЕННЫЙ ФАЙЛ ИЗ СПИСКА
-                        selectedFiles = selectedFiles.filter(f => f !== file);
-                        renderFiles(); 
-                    } else {
-                        throw new Error('Server error');
-                    }
+                    selectedFiles = selectedFiles.filter(f => f !== file);
+                    renderFiles();
                 } catch (e) {
-                    console.error('Ошибка файла:', file.name, e);
-                    // Если ошибка - файл остается в списке, идем к следующему
+                    console.error('Error:', file.name);
+                    break; 
                 }
             }
             
-            progressBar.style.width = '100%';
-            setTimeout(() => {
-                isUploading = false;
-                sendBtn.disabled = false;
-                progressDiv.style.display = 'none';
-                progressBar.style.width = '0%';
-                
-                if (selectedFiles.length === 0) {
-                    alert('🎉 Все файлы успешно переданы!');
-                } else {
-                    alert(`⚠️ Передача завершена. Не удалось отправить: ${selectedFiles.length} файл(ов). Попробуйте еще раз.`);
-                }
-                renderFiles();
-            }, 500);
+            isUploading = false;
+            sendBtn.disabled = false;
+            progressDiv.style.display = 'none';
+            if (selectedFiles.length === 0) alert('🎉 Все файлы успешно переданы!');
+            else alert('⚠️ Передача прервана. Осталось файлов: ' + selectedFiles.length);
+            renderFiles();
         }
 
         sendBtn.onclick = sendFiles;
