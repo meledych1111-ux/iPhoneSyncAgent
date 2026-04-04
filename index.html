@@ -21,10 +21,11 @@
         .ip-input:focus { border-color: #007AFF; }
         button { width: 100%; padding: 16px; border: none; border-radius: 14px; font-size: 17px; font-weight: 700; cursor: pointer; transition: 0.2s; -webkit-appearance: none; }
         button:active { transform: scale(0.98); opacity: 0.9; }
+        button:disabled { background: #ccc !important; cursor: not-allowed; }
         .btn-blue { background: #007AFF; color: white; margin-bottom: 12px; }
         .btn-green { background: #34C759; color: white; margin-top: 12px; }
         .btn-red { background: #FF3B30; color: white; margin-top: 8px; padding: 10px; font-size: 14px; }
-        .file-list { margin-top: 15px; background: #FFF; border-radius: 14px; }
+        .file-list { margin-top: 15px; background: #FFF; border-radius: 14px; max-height: 300px; overflow-y: auto; }
         .file-item { padding: 12px 16px; border-bottom: 1px solid #F0F0F0; display: flex; justify-content: space-between; align-items: center; }
         .progress { height: 12px; background: #E0E0E0; border-radius: 6px; margin-top: 20px; display: none; overflow: hidden; }
         .progress-bar { width: 0%; height: 100%; background: #34C759; transition: 0.3s; }
@@ -39,26 +40,19 @@
         <input type="text" id="pcIp" class="ip-input" placeholder="Напр: 192.168.1.50">
         <button id="checkBtn" class="btn-blue">🔍 Проверить связь</button>
         <div id="pcStatus" class="status offline">🔴 Не подключен</div>
-        <div id="httpsWarning" class="warning">⚠️ Ошибка: Вы зашли через HTTPS. <br> Используйте http:// для работы в сети.</div>
     </div>
 
     <div class="card">
-        <button id="selectFilesBtn" class="btn-blue">📁 Выбрать любые файлы</button>
+        <button id="selectFilesBtn" class="btn-blue">📁 Выбрать фото/файлы</button>
         <input type="file" id="fileInput" multiple style="display: none;">
         <div id="fileList" class="file-list"></div>
-        <button id="clearBtn" class="btn-red" style="display: none;">🗑 Очистить список</button>
+        <button id="clearBtn" class="btn-red" style="display: none;">🗑 Очистить всё</button>
         <button id="sendBtn" class="btn-green" style="display: none;">📤 Отправить на компьютер</button>
         <div class="progress" id="progress"><div class="progress-bar" id="progressBar"></div></div>
+        <div id="statusText" style="text-align:center;font-size:13px;margin-top:8px;color:#666;"></div>
     </div>
 
     <script>
-        /**
-         * ИСПРАВЛЕНИЯ ОШИБОК:
-         * 1. Дубликаты: При добавлении файлов теперь проверяем имя и размер (см. onchange).
-         * 2. Выбрать все: Кнопка multiple включена, но "Выбрать все" зависит от системы.
-         *    Добавлена кнопка "Очистить список" для управления выбранным.
-         * 3. Повторная отправка: Кнопка отправки блокируется во время процесса.
-         */
         const PORT = 15000;
         let selectedFiles = [];
         let isOnline = false;
@@ -71,22 +65,22 @@
         const clearBtn = document.getElementById('clearBtn');
         const progressBar = document.getElementById('progressBar');
         const progressDiv = document.getElementById('progress');
+        const statusText = document.getElementById('statusText');
 
-        // Автозаполнение из памяти
         pcIpInput.value = localStorage.getItem('pcIp') || '';
-        if (window.location.protocol === 'https:') document.getElementById('httpsWarning').style.display = 'block';
 
         document.getElementById('checkBtn').onclick = checkConnection;
-        document.getElementById('selectFilesBtn').onclick = () => document.getElementById('fileInput').click();
+        document.getElementById('selectFilesBtn').onclick = () => {
+            if (!isUploading) document.getElementById('fileInput').click();
+        };
         
         document.getElementById('fileInput').onchange = (e) => {
             const newFiles = Array.from(e.target.files);
-            // ФИЛЬТР ДУБЛИКАТОВ: Пропускаем те, что уже есть в списке (по имени и размеру)
             newFiles.forEach(nf => {
                 const exists = selectedFiles.some(f => f.name === nf.name && f.size === nf.size);
                 if (!exists) selectedFiles.push(nf);
             });
-            e.target.value = ''; // Сбрасываем инпут, чтобы можно было выбрать те же файлы снова (если вдруг удалим)
+            e.target.value = '';
             renderFiles();
         };
 
@@ -101,9 +95,10 @@
                 fileList.innerHTML = '';
                 sendBtn.style.display = 'none';
                 clearBtn.style.display = 'none';
+                statusText.innerText = '';
                 return;
             }
-            fileList.innerHTML = selectedFiles.map((f, i) => `
+            fileList.innerHTML = selectedFiles.map(f => `
                 <div class="file-item">
                     <span style="max-width:70%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${f.name}</span>
                     <span style="color:#888;font-size:12px;">${(f.size/1024/1024).toFixed(1)} MB</span>
@@ -113,64 +108,52 @@
                 sendBtn.style.display = 'block';
                 clearBtn.style.display = 'block';
             }
+            statusText.innerText = `Выбрано файлов: ${selectedFiles.length}`;
         }
 
         async function checkConnection() {
             const ip = pcIpInput.value.trim();
-            if (!ip) { alert('Пожалуйста, введите IP адрес компьютера!'); return; }
-            
+            if (!ip) return;
             localStorage.setItem('pcIp', ip);
-            pcStatus.innerHTML = '🔄 Проверка связи...';
-            pcStatus.className = 'status';
-            
+            pcStatus.innerHTML = '🔄 Проверка...';
             try {
-                // Тайм-аут 3 секунды
-                const controller = new AbortController();
-                const timeoutId = setTimeout(() => controller.abort(), 3000);
-
-                const res = await fetch(`http://${ip}:${PORT}/status`, { 
-                    mode: 'cors',
-                    signal: controller.signal
-                });
-                
-                clearTimeout(timeoutId);
+                const res = await fetch(`http://${ip}:${PORT}/status`, { mode: 'cors' });
                 if (res.ok) {
-                    pcStatus.innerHTML = '✅ Связь с компьютером установлена!';
+                    pcStatus.innerHTML = '✅ Связь установлена';
                     pcStatus.className = 'status online';
                     isOnline = true;
-                    if (selectedFiles.length > 0) {
-                        sendBtn.style.display = 'block';
-                        clearBtn.style.display = 'block';
-                    }
-                } else {
-                    throw new Error();
+                    renderFiles();
                 }
             } catch (e) {
-                pcStatus.innerHTML = '❌ Компьютер не отвечает. <br> Проверьте Агент на ПК и сеть Wi-Fi.';
+                pcStatus.innerHTML = '❌ Нет связи с ПК';
                 pcStatus.className = 'status offline';
                 isOnline = false;
-                sendBtn.style.display = 'none';
-                clearBtn.style.display = 'none';
             }
         }
 
         async function sendFiles() {
-            if (!isOnline || isUploading) return;
+            if (!isOnline || isUploading || selectedFiles.length === 0) return;
             const ip = pcIpInput.value.trim();
             
             isUploading = true;
             sendBtn.disabled = true;
-            sendBtn.innerHTML = '📤 Передача...';
             clearBtn.style.display = 'none';
             progressDiv.style.display = 'block';
             
-            for (let i = 0; i < selectedFiles.length; i++) {
-                const file = selectedFiles[i];
-                const percent = Math.round((i / selectedFiles.length) * 100);
+            const totalFiles = selectedFiles.length;
+            let currentIdx = 0;
+
+            // Копируем список, чтобы итерироваться по нему
+            const filesToUpload = [...selectedFiles];
+
+            for (const file of filesToUpload) {
+                currentIdx++;
+                const percent = Math.round(((currentIdx-1) / totalFiles) * 100);
                 progressBar.style.width = percent + '%';
+                statusText.innerText = `Отправка ${currentIdx} из ${totalFiles}: ${file.name}`;
 
                 try {
-                    await fetch(`http://${ip}:${PORT}/upload`, {
+                    const res = await fetch(`http://${ip}:${PORT}/upload`, {
                         method: 'POST',
                         mode: 'cors',
                         headers: {
@@ -179,37 +162,44 @@
                         },
                         body: file
                     });
+
+                    if (res.ok) {
+                        // УДАЛЯЕМ УСПЕШНО ОТПРАВЛЕННЫЙ ФАЙЛ ИЗ СПИСКА
+                        selectedFiles = selectedFiles.filter(f => f !== file);
+                        renderFiles(); 
+                    } else {
+                        throw new Error('Server error');
+                    }
                 } catch (e) {
-                    console.error('Ошибка:', e);
-                    alert('Ошибка при передаче файла: ' + file.name);
+                    console.error('Ошибка файла:', file.name, e);
+                    // Если ошибка - файл остается в списке, идем к следующему
                 }
             }
             
             progressBar.style.width = '100%';
             setTimeout(() => {
-                alert('🎉 Все файлы успешно переданы на компьютер!');
-                progressDiv.style.display = 'none';
-                progressBar.style.width = '0%';
-                selectedFiles = [];
                 isUploading = false;
                 sendBtn.disabled = false;
-                sendBtn.innerHTML = '📤 Отправить на компьютер';
+                progressDiv.style.display = 'none';
+                progressBar.style.width = '0%';
+                
+                if (selectedFiles.length === 0) {
+                    alert('🎉 Все файлы успешно переданы!');
+                } else {
+                    alert(`⚠️ Передача завершена. Не удалось отправить: ${selectedFiles.length} файл(ов). Попробуйте еще раз.`);
+                }
                 renderFiles();
-            }, 600);
+            }, 500);
         }
 
         sendBtn.onclick = sendFiles;
 
-        // Service Worker для PWA
         if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.register('sw.js').catch(e => console.error('SW Error:', e));
-            
-            navigator.serviceWorker.addEventListener('message', (event) => {
-                if (event.data && event.data.type === 'SHARE_TARGET_FILES') {
-                    // ФИЛЬТРУЕМ ДУБЛИКАТЫ ПРИ ШАРИНГЕ ИЗ СИСТЕМЫ
-                    event.data.files.forEach(nf => {
-                        const exists = selectedFiles.some(f => f.name === nf.name && f.size === nf.size);
-                        if (!exists) selectedFiles.push(nf);
+            navigator.serviceWorker.register('sw.js');
+            navigator.serviceWorker.addEventListener('message', (e) => {
+                if (e.data?.type === 'SHARE_TARGET_FILES') {
+                    e.data.files.forEach(nf => {
+                        if (!selectedFiles.some(f => f.name === nf.name && f.size === nf.size)) selectedFiles.push(nf);
                     });
                     renderFiles();
                 }
