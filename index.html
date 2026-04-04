@@ -25,11 +25,11 @@
         .btn-blue { background: #007AFF; color: white; margin-bottom: 12px; }
         .btn-green { background: #34C759; color: white; margin-top: 12px; }
         .btn-red { background: #FF3B30; color: white; margin-top: 8px; padding: 10px; font-size: 14px; }
-        .file-list { margin-top: 15px; background: #FFF; border-radius: 14px; max-height: 250px; overflow-y: auto; }
-        .file-item { padding: 10px 16px; border-bottom: 1px solid #F0F0F0; display: flex; justify-content: space-between; align-items: center; font-size: 14px; }
-        .progress { height: 16px; background: #E0E0E0; border-radius: 8px; margin-top: 20px; display: none; overflow: hidden; position: relative; }
+        .file-list { margin-top: 15px; background: #FFF; border-radius: 14px; max-height: 200px; overflow-y: auto; }
+        .file-item { padding: 10px 16px; border-bottom: 1px solid #F0F0F0; display: flex; justify-content: space-between; align-items: center; font-size: 13px; }
+        .progress { height: 20px; background: #E0E0E0; border-radius: 10px; margin-top: 20px; display: none; overflow: hidden; position: relative; }
         .progress-bar { width: 0%; height: 100%; background: #34C759; transition: 0.1s; }
-        .progress-text { position: absolute; width: 100%; text-align: center; font-size: 11px; color: #000; font-weight: bold; line-height: 16px; }
+        .progress-text { position: absolute; width: 100%; text-align: center; font-size: 12px; color: #000; font-weight: bold; line-height: 20px; }
     </style>
 </head>
 <body>
@@ -37,7 +37,7 @@
 
     <div class="card">
         <label style="display:block;margin-bottom:8px;font-size:12px;color:#888;text-align:center;">IP АДРЕС КОМПЬЮТЕРА</label>
-        <input type="text" id="pcIp" class="ip-input" placeholder="Напр: 192.168.31.199">
+        <input type="text" id="pcIp" class="ip-input" placeholder="192.168.31.199">
         <button id="checkBtn" class="btn-blue">🔍 Проверить связь</button>
         <div id="pcStatus" class="status offline">🔴 Не подключен</div>
     </div>
@@ -53,7 +53,7 @@
             <div class="progress-bar" id="progressBar"></div>
             <div class="progress-text" id="pText">0%</div>
         </div>
-        <div id="statusText" style="text-align:center;font-size:13px;margin-top:10px;color:#444;font-weight:600;"></div>
+        <div id="statusText" style="text-align:center;font-size:14px;margin-top:10px;color:#000;font-weight:700;"></div>
     </div>
 
     <script>
@@ -73,14 +73,14 @@
         const statusText = document.getElementById('statusText');
         const pText = document.getElementById('pText');
 
-        // Сначала пробуем из памяти, если пусто - ставим твой IP
         pcIpInput.value = localStorage.getItem('pcIp') || DEFAULT_IP;
 
         document.getElementById('checkBtn').onclick = checkConnection;
         document.getElementById('selectFilesBtn').onclick = () => !isUploading && document.getElementById('fileInput').click();
         
         document.getElementById('fileInput').onchange = (e) => {
-            Array.from(e.target.files).forEach(nf => {
+            const files = Array.from(e.target.files);
+            files.forEach(nf => {
                 if (!selectedFiles.some(f => f.name === nf.name && f.size === nf.size)) selectedFiles.push(nf);
             });
             e.target.value = '';
@@ -97,14 +97,25 @@
                 statusText.innerText = '';
                 return;
             }
-            fileList.innerHTML = selectedFiles.map(f => `
+            
+            // ОПТИМИЗАЦИЯ: Если файлов много, показываем только последние 10, чтобы телефон не тормозил
+            const showFiles = selectedFiles.slice(-10);
+            const hiddenCount = selectedFiles.length - showFiles.length;
+            
+            let html = showFiles.map(f => `
                 <div class="file-item">
                     <span style="max-width:70%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${f.name}</span>
                     <span style="color:#888;">${(f.size/1024/1024).toFixed(1)} MB</span>
                 </div>
             `).join('');
+            
+            if (hiddenCount > 0) {
+                html = `<div style="text-align:center;padding:10px;color:#888;font-size:12px;">... и еще ${hiddenCount} объектов ...</div>` + html;
+            }
+            
+            fileList.innerHTML = html;
             if (isOnline && !isUploading) { sendBtn.style.display = 'block'; clearBtn.style.display = 'block'; }
-            statusText.innerText = `Выбрано: ${selectedFiles.length}`;
+            statusText.innerText = `ВЫБРАНО: ${selectedFiles.length} ОБЪЕКТОВ`;
         }
 
         async function checkConnection() {
@@ -132,11 +143,7 @@
                 xhr.open('POST', `http://${ip}:${PORT}/upload`);
                 xhr.setRequestHeader('X-File-Name', encodeURIComponent(file.name));
                 xhr.setRequestHeader('X-File-Size', file.size.toString());
-                
-                xhr.upload.onprogress = (e) => {
-                    if (e.lengthComputable) onProgress(e.loaded, e.total);
-                };
-                
+                xhr.upload.onprogress = (e) => { if (e.lengthComputable) onProgress(e.loaded, e.total); };
                 xhr.onload = () => xhr.status === 200 ? resolve() : reject();
                 xhr.onerror = () => reject();
                 xhr.send(file);
@@ -157,7 +164,7 @@
 
             for (let i = 0; i < filesCopy.length; i++) {
                 const file = filesCopy[i];
-                statusText.innerText = `Файл ${i + 1} из ${totalFiles}: ${file.name}`;
+                statusText.innerText = `ОТПРАВКА ${i + 1} ИЗ ${totalFiles}`;
                 
                 try {
                     await uploadFile(file, ip, (loaded, total) => {
@@ -166,7 +173,6 @@
                         progressBar.style.width = totalPercent + '%';
                         pText.innerText = `${totalPercent}% (Файл: ${filePercent}%)`;
                     });
-
                     selectedFiles = selectedFiles.filter(f => f !== file);
                     renderFiles();
                 } catch (e) {
@@ -178,8 +184,8 @@
             isUploading = false;
             sendBtn.disabled = false;
             progressDiv.style.display = 'none';
-            if (selectedFiles.length === 0) alert('🎉 Все файлы успешно переданы!');
-            else alert('⚠️ Передача прервана. Осталось файлов: ' + selectedFiles.length);
+            if (selectedFiles.length === 0) alert('🎉 Все 748 файлов переданы!');
+            else alert('⚠️ Прервано. Осталось: ' + selectedFiles.length);
             renderFiles();
         }
 
