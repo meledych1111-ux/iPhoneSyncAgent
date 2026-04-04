@@ -25,19 +25,19 @@
         .btn-blue { background: #007AFF; color: white; margin-bottom: 12px; }
         .btn-green { background: #34C759; color: white; margin-top: 12px; }
         .btn-red { background: #FF3B30; color: white; margin-top: 8px; padding: 10px; font-size: 14px; }
-        .file-list { margin-top: 15px; background: #FFF; border-radius: 14px; max-height: 200px; overflow-y: auto; }
+        .file-list { margin-top: 15px; background: #FFF; border-radius: 14px; max-height: 180px; overflow-y: auto; }
         .file-item { padding: 10px 16px; border-bottom: 1px solid #F0F0F0; display: flex; justify-content: space-between; align-items: center; font-size: 13px; }
-        .progress { height: 20px; background: #E0E0E0; border-radius: 10px; margin-top: 20px; display: none; overflow: hidden; position: relative; }
+        .progress { height: 24px; background: #E0E0E0; border-radius: 12px; margin-top: 20px; display: none; overflow: hidden; position: relative; }
         .progress-bar { width: 0%; height: 100%; background: #34C759; transition: 0.1s; }
-        .progress-text { position: absolute; width: 100%; text-align: center; font-size: 12px; color: #000; font-weight: bold; line-height: 20px; }
+        .progress-text { position: absolute; width: 100%; text-align: center; font-size: 13px; color: #000; font-weight: bold; line-height: 24px; }
     </style>
 </head>
 <body>
-    <div class="header"><h1>📱 iPhoneSync</h1><p>Оригинальное качество файлов</p></div>
+    <div class="header"><h1>📱 iPhoneSync</h1><p>Быстрая передача</p></div>
 
     <div class="card">
         <label style="display:block;margin-bottom:8px;font-size:12px;color:#888;text-align:center;">IP АДРЕС КОМПЬЮТЕРА</label>
-        <input type="text" id="pcIp" class="ip-input" placeholder="192.168.31.199">
+        <input type="text" id="pcIp" class="ip-input">
         <button id="checkBtn" class="btn-blue">🔍 Проверить связь</button>
         <div id="pcStatus" class="status offline">🔴 Не подключен</div>
     </div>
@@ -53,13 +53,14 @@
             <div class="progress-bar" id="progressBar"></div>
             <div class="progress-text" id="pText">0%</div>
         </div>
-        <div id="statusText" style="text-align:center;font-size:14px;margin-top:10px;color:#000;font-weight:700;"></div>
+        <div id="statusText" style="text-align:center;font-size:15px;margin-top:15px;color:#000;font-weight:700;"></div>
     </div>
 
     <script>
         const PORT = 15000;
         const DEFAULT_IP = "192.168.31.199";
         let selectedFiles = [];
+        let knownFiles = new Set(); // Для мгновенной проверки дубликатов
         let isOnline = false;
         let isUploading = false;
 
@@ -78,18 +79,32 @@
         document.getElementById('checkBtn').onclick = checkConnection;
         document.getElementById('selectFilesBtn').onclick = () => !isUploading && document.getElementById('fileInput').click();
         
-        document.getElementById('fileInput').onchange = (e) => {
-            const files = Array.from(e.target.files);
+        function addFiles(files) {
             files.forEach(nf => {
-                if (!selectedFiles.some(f => f.name === nf.name && f.size === nf.size)) selectedFiles.push(nf);
+                const key = `${nf.name}-${nf.size}`;
+                if (!knownFiles.has(key)) {
+                    knownFiles.add(key);
+                    selectedFiles.push(nf);
+                }
             });
-            e.target.value = '';
             renderFiles();
+        }
+
+        document.getElementById('fileInput').onchange = (e) => {
+            addFiles(Array.from(e.target.files));
+            e.target.value = '';
         };
 
-        clearBtn.onclick = () => { if (!isUploading) { selectedFiles = []; renderFiles(); } };
+        clearBtn.onclick = () => { 
+            if (!isUploading) { 
+                selectedFiles = []; 
+                knownFiles.clear(); 
+                renderFiles(); 
+            } 
+        };
 
         function renderFiles() {
+            if (isUploading) return;
             if (selectedFiles.length === 0) {
                 fileList.innerHTML = '';
                 sendBtn.style.display = 'none';
@@ -97,20 +112,19 @@
                 statusText.innerText = '';
                 return;
             }
-            const showFiles = selectedFiles.slice(-10);
+            const showCount = 3;
+            const showFiles = selectedFiles.slice(-showCount);
             const hiddenCount = selectedFiles.length - showFiles.length;
             let html = showFiles.map(f => `
                 <div class="file-item">
-                    <span style="max-width:70%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${f.name}</span>
+                    <span>${f.name.substring(0,15)}...</span>
                     <span style="color:#888;">${(f.size/1024/1024).toFixed(1)} MB</span>
                 </div>
             `).join('');
-            if (hiddenCount > 0) {
-                html = `<div style="text-align:center;padding:10px;color:#888;font-size:12px;">... и еще ${hiddenCount} объектов ...</div>` + html;
-            }
+            if (hiddenCount > 0) html = `<div style="text-align:center;padding:8px;color:#888;font-size:11px;">+ ${hiddenCount} объектов в очереди</div>` + html;
             fileList.innerHTML = html;
-            if (isOnline && !isUploading) { sendBtn.style.display = 'block'; clearBtn.style.display = 'block'; }
-            statusText.innerText = `ВЫБРАНО: ${selectedFiles.length} ОБЪЕКТОВ`;
+            if (isOnline) { sendBtn.style.display = 'block'; clearBtn.style.display = 'block'; }
+            statusText.innerText = `ВЫБРАНО: ${selectedFiles.length}`;
         }
 
         async function checkConnection() {
@@ -148,48 +162,47 @@
         async function sendFiles() {
             if (!isOnline || isUploading || selectedFiles.length === 0) return;
             const ip = pcIpInput.value.trim() || DEFAULT_IP;
+            const totalCount = selectedFiles.length;
             
-            const totalToUpload = selectedFiles.length;
             isUploading = true;
             sendBtn.disabled = true;
             clearBtn.style.display = 'none';
+            fileList.style.opacity = '0.3';
             progressDiv.style.display = 'block';
             
-            const filesCopy = [...selectedFiles];
             let successCount = 0;
+            // Работаем с копией, чтобы не мутировать массив в цикле
+            const queue = [...selectedFiles];
 
-            for (let i = 0; i < filesCopy.length; i++) {
-                const file = filesCopy[i];
-                statusText.innerText = `ОТПРАВКА ${i + 1} ИЗ ${totalToUpload}`;
+            for (let i = 0; i < queue.length; i++) {
+                const file = queue[i];
+                statusText.innerText = `ОТПРАВКА: ${i + 1} ИЗ ${totalCount}`;
                 
                 try {
                     await uploadFile(file, ip, (loaded, total) => {
                         const filePercent = Math.round((loaded / total) * 100);
-                        const totalPercent = Math.round(((i / totalToUpload) * 100) + (filePercent / totalToUpload));
+                        const totalPercent = Math.round(((i / totalCount) * 100) + (filePercent / totalCount));
                         progressBar.style.width = totalPercent + '%';
-                        pText.innerText = `${totalPercent}% (Файл: ${filePercent}%)`;
+                        pText.innerText = `${totalPercent}%`;
                     });
-                    selectedFiles = selectedFiles.filter(f => f !== file);
                     successCount++;
-                    renderFiles();
                 } catch (e) {
                     console.error('Error:', file.name);
                     break; 
                 }
             }
             
+            // После завершения всего цикла очищаем списки
+            selectedFiles = selectedFiles.slice(successCount);
+            knownFiles = new Set(selectedFiles.map(f => `${f.name}-${f.size}`));
+            
             isUploading = false;
             sendBtn.disabled = false;
+            fileList.style.opacity = '1';
             progressDiv.style.display = 'none';
-            
-            if (successCount > 0) {
-                alert(`🎉 Успешно передано объектов: ${successCount}`);
-            }
-            
-            if (selectedFiles.length > 0) {
-                alert(`⚠️ Передача прервана. Осталось: ${selectedFiles.length} объектов.`);
-            }
             renderFiles();
+            
+            if (successCount > 0) alert(`Успешно передано: ${successCount}`);
         }
 
         sendBtn.onclick = sendFiles;
@@ -198,10 +211,7 @@
             navigator.serviceWorker.register('sw.js');
             navigator.serviceWorker.addEventListener('message', (e) => {
                 if (e.data?.type === 'SHARE_TARGET_FILES') {
-                    e.data.files.forEach(nf => {
-                        if (!selectedFiles.some(f => f.name === nf.name && f.size === nf.size)) selectedFiles.push(nf);
-                    });
-                    renderFiles();
+                    addFiles(e.data.files);
                 }
             });
         }
